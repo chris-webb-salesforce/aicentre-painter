@@ -92,13 +92,6 @@ class HorizontalTableDrawingRobot:
         self.pen_is_down = False
         self.current_position = None
         
-        # Desired J6 angle for pen holder
-        self.DESIRED_J6_ANGLE = 45
-    
-    # J6 angle controlled by Cartesian RZ coordinate (removed force_j6_angle method)
-        
-        print("Loading face detection model...")
-        self.face_cascade = cv2.CascadeClassifier(HAAR_CASCADE_PATH)
         
         # Orientation for flat table drawing with pen pointing straight down
         # [RX, RY, RZ] - pen holder rotation controlled by J6 joint position
@@ -244,9 +237,6 @@ class HorizontalTableDrawingRobot:
                 y = y1 + (y2 - y1) * ratio
                 self.mc.send_coords([x, y, PEN_DRAWING_Z] + self.DRAWING_ORIENTATION, DRAWING_SPEED, 0)
                 time.sleep(0.08)  # Increased delay for smoother drawing
-                # Force J6 angle every few points to avoid drift
-                if i % 3 == 0:  # Every 3rd point
-                    # Pen angle maintained automatically
         
         self.current_position = [x2, y2]
     
