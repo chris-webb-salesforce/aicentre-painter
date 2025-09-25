@@ -394,7 +394,8 @@ class VerticalDrawingRobot:
             
             if closest is not None:
                 ordered.append(closest)
-                remaining.remove(closest)
+                # Use list comprehension to safely remove the contour
+                remaining = [c for c in remaining if c is not closest]
                 last_point = closest[-1][0] if len(closest) > 0 else last_point
             else:
                 break
@@ -412,8 +413,14 @@ class VerticalDrawingRobot:
         
         simplified_contours = []
         for contour in contours:
-            if cv2.contourArea(contour) < 2:
+            # Skip if contour is too small or invalid
+            try:
+                area = cv2.contourArea(contour)
+                if area < 2:
+                    continue
+            except:
                 continue
+            
             epsilon = CONTOUR_SIMPLIFICATION_FACTOR * cv2.arcLength(contour, True)
             approx = cv2.approxPolyDP(contour, epsilon, True)
             simplified_contours.append(approx)
@@ -511,11 +518,12 @@ class VerticalDrawingRobot:
                 break
             
             # Photo capture
-            self.go_to_photo_position()
-            if not self.capture_image():
-                print("Image capture cancelled.")
-                self.go_to_home_position()
-                continue
+            # Skip for now
+            # self.go_to_photo_position()
+            # if not self.capture_image():
+            #     print("Image capture cancelled.")
+            #     self.go_to_home_position()
+            #     continue
             
             # Create sketch
             sketch = self.create_sketch()
