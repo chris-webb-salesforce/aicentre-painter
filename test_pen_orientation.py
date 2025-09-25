@@ -9,10 +9,10 @@ import time
 SERIAL_PORT = "/dev/ttyAMA0"
 BAUD_RATE = 115200
 
-# Drawing position settings from main script
-ORIGIN_X = 205.1
-ORIGIN_Y = -85.3
-ORIGIN_Z = 110.2
+# Drawing position settings from main script (calibrated values)
+ORIGIN_X = 180.0
+ORIGIN_Y = -80.0
+ORIGIN_Z = 120.0
 PEN_RETRACT_Y = ORIGIN_Y - 30
 
 # Orientation with 45° pen holder rotation

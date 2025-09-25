@@ -16,18 +16,18 @@ class OriginCalibrator:
             print(f"Failed to connect to robot: {e}")
             sys.exit(1)
         
-        # Standard drawing orientation for vertical surface
-        self.ORIENTATION = [180, -90, -90]
+        # Standard drawing orientation with 45° pen holder rotation
+        self.ORIENTATION = [180, -90, 45]  # RZ=45 for pen holder
         
-        # Starting position (adjust these as a starting point)
-        self.current_x = 200.0
-        self.current_y = -85.0
-        self.current_z = 110.0
+        # Starting position (calibrated for better reach)
+        self.current_x = 180.0
+        self.current_y = -80.0
+        self.current_z = 120.0
         
     def go_to_home(self):
         """Move to safe home position."""
         print("Moving to home position...")
-        self.mc.send_angles([0, 0, 0, 0, 90, 0], 40)
+        self.mc.send_angles([0, 0, 0, 0, 90, 45], 40)  # J6=45° for pen holder
         time.sleep(3)
     
     def move_to_current_position(self):

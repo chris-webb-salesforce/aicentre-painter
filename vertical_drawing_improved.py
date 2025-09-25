@@ -7,9 +7,10 @@ import os
 
 # --- Workspace Calibration for VERTICAL Drawing ---
 # The (X, Y, Z) coordinate of the top-left corner of your VERTICAL drawing area
-ORIGIN_X = 205.1  # Horizontal position
-ORIGIN_Y = -85.3  # Distance from wall (negative = toward wall)
-ORIGIN_Z = 110.2  # Vertical position
+# These values are from calibrated drawing position for better reachability
+ORIGIN_X = 180.0  # Horizontal position (closer to base for better reach)
+ORIGIN_Y = -80.0  # Distance from wall (negative = toward wall)
+ORIGIN_Z = 120.0  # Vertical position (top-left of drawing area)
 
 # Drawing area dimensions
 DRAWING_AREA_WIDTH_MM = 120
