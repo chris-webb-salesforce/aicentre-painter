@@ -57,9 +57,9 @@ SKETCH_IMAGE_PATH = "sketch_to_draw.jpg"
 HAAR_CASCADE_PATH = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
 CAMERA_INDEX = 0
 
-class VerticalDrawingRobot:
+class HorizontalTableDrawingRobot:
     def __init__(self):
-        print("Initializing Vertical Drawing Robot...")
+        print("Initializing Horizontal Table Drawing Robot...")
         try:
             self.mc = MyCobot320(SERIAL_PORT, BAUD_RATE)
             time.sleep(2)  # Give robot time to initialize
