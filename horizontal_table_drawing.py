@@ -77,7 +77,7 @@ class HorizontalTableDrawingRobot:
         
         # Orientation for flat table drawing with pen pointing down
         # [RX, RY, RZ] - RZ=135 accounts for pen holder orientation
-        self.DRAWING_ORIENTATION = [180, 0, 135]
+        self.DRAWING_ORIENTATION = [180, 90, 135]
         
         # Track current pen state
         self.pen_is_down = False
@@ -96,7 +96,7 @@ class HorizontalTableDrawingRobot:
         test_z = ORIGIN_Z - DRAWING_AREA_HEIGHT_MM / 2
         
         print("Moving to test position...")
-        self.mc.send_coords([test_x, PEN_RETRACT_Y, test_z] + self.DRAWING_ORIENTATION, 30, 0)
+        self.mc.send_coords([test_x, test_y, PEN_RETRACT_Z] + self.DRAWING_ORIENTATION, 30, 0)
         time.sleep(3)
         
         test_y = ORIGIN_Y
@@ -124,12 +124,12 @@ class HorizontalTableDrawingRobot:
             elif key == 's':
                 print(f"\\nOptimal pressure Y position saved: {test_y:.1f}mm")
                 print("Update PEN_DRAWING_Y in your code to this value.")
-                self.mc.send_coords([test_x, PEN_RETRACT_Y, test_z] + self.DRAWING_ORIENTATION, 30, 0)
+                self.mc.send_coords([test_x, test_y, PEN_RETRACT_Z] + self.DRAWING_ORIENTATION, 30, 0)
                 time.sleep(2)
                 return test_y
             elif key == 'q':
                 print("Calibration cancelled.")
-                self.mc.send_coords([test_x, PEN_RETRACT_Y, test_z] + self.DRAWING_ORIENTATION, 30, 0)
+                self.mc.send_coords([test_x, test_y, PEN_RETRACT_Z] + self.DRAWING_ORIENTATION, 30, 0)
                 time.sleep(2)
                 return None
                 
@@ -460,10 +460,10 @@ class HorizontalTableDrawingRobot:
             # Update progress bar
             self.print_progress_bar(i+1, total_contours, prefix="Drawing")
             
-            # Convert first point to mm
+            # Convert first point to mm (maintain top-to-bottom, left-to-right tracing)
             start_point_px = contour[0][0]
             start_x_mm = ORIGIN_X + (start_point_px[0] / IMAGE_WIDTH_PX) * DRAWING_AREA_WIDTH_MM
-            start_y_mm = ORIGIN_Y + (start_point_px[1] / IMAGE_HEIGHT_PX) * DRAWING_AREA_HEIGHT_MM
+            start_y_mm = ORIGIN_Y + DRAWING_AREA_HEIGHT_MM - (start_point_px[1] / IMAGE_HEIGHT_PX) * DRAWING_AREA_HEIGHT_MM
             
             # Move to start position and lower pen
             self.gentle_pen_down(start_x_mm, start_y_mm)
@@ -473,7 +473,7 @@ class HorizontalTableDrawingRobot:
             for j in range(1, len(contour)):
                 point_px = contour[j][0]
                 x_mm = ORIGIN_X + (point_px[0] / IMAGE_WIDTH_PX) * DRAWING_AREA_WIDTH_MM
-                y_mm = ORIGIN_Y + (point_px[1] / IMAGE_HEIGHT_PX) * DRAWING_AREA_HEIGHT_MM
+                y_mm = ORIGIN_Y + DRAWING_AREA_HEIGHT_MM - (point_px[1] / IMAGE_HEIGHT_PX) * DRAWING_AREA_HEIGHT_MM
                 
                 self.draw_line_segment(prev_point, (x_mm, y_mm))
                 prev_point = (x_mm, y_mm)
@@ -546,5 +546,5 @@ if __name__ == "__main__":
         print("Haar Cascade file not found.")
         print(f"Path: {HAAR_CASCADE_PATH}")
     else:
-        robot = VerticalDrawingRobot()
+        robot = HorizontalTableDrawingRobot()
         robot.run()
