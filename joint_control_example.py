@@ -13,15 +13,15 @@ class HybridControlPainter:
         
         # Define key positions using joint angles for reliability
         self.JOINT_POSITIONS = {
-            'home': [0, 0, 0, 0, 90, 0],
-            'photo': [0, -45, -45, 0, 90, 0],
-            'pre_draw': [45, -30, -60, 0, 90, 45],  # Ready position before drawing
-            'maintenance': [0, 45, 45, 0, 0, 0],    # Easy access for pen change
+            'home': [0, 0, 0, 0, 90, 135],  # J6=135° for pen holder
+            'photo': [0, -45, -45, 0, 90, 135],
+            'pre_draw': [45, -30, -60, 0, 90, 135],  # Ready position before drawing
+            'maintenance': [0, 45, 45, 0, 0, 135],    # Easy access for pen change
         }
         
         # Drawing workspace in Cartesian coordinates
         self.DRAWING_WORKSPACE = {
-            'origin': [205.1, -85.3, 110.2],
+            'origin': [180.0, -80.0, 120.0],  # Calibrated position
             'width': 120,
             'height': 180
         }

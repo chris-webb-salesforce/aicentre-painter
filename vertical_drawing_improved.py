@@ -75,9 +75,10 @@ class VerticalDrawingRobot:
         print("Loading face detection model...")
         self.face_cascade = cv2.CascadeClassifier(HAAR_CASCADE_PATH)
         
-        # Stable orientation for vertical drawing with 45° pen holder rotation
-        # [RX, RY, RZ] - RZ=45 accounts for pen holder orientation
-        self.DRAWING_ORIENTATION = [180, -90, 45]
+        # Stable orientation for vertical drawing with 135° pen holder rotation
+        # Drawing area rotated 90° to the left
+        # [RX, RY, RZ] - RZ=135 accounts for pen holder orientation
+        self.DRAWING_ORIENTATION = [90, -90, 135]
         
         # Track current pen state
         self.pen_is_down = False
@@ -232,7 +233,7 @@ class VerticalDrawingRobot:
         """Move to neutral safe position when not drawing."""
         print("Moving to safe neutral position...")
         self.gentle_pen_up()
-        self.mc.send_angles([0, 0, 0, 0, 90, 45], 40)  # Note: J6 at 45° for pen holder
+        self.mc.send_angles([0, 0, 0, 0, 90, 135], 40)  # Note: J6 at 135° for pen holder
         time.sleep(3)
     
     def test_drawing_area(self):
@@ -348,6 +349,23 @@ class VerticalDrawingRobot:
         print(f"Sketch created and saved to {SKETCH_IMAGE_PATH}")
         return final_sketch
     
+    def print_progress_bar(self, current, total, bar_length=50, prefix="Progress"):
+        """Print a progress bar to the terminal."""
+        if total == 0:
+            return
+        
+        progress = current / total
+        filled_length = int(bar_length * progress)
+        bar = '█' * filled_length + '░' * (bar_length - filled_length)
+        percent = progress * 100
+        
+        # Print with carriage return to update same line
+        print(f'\r{prefix}: |{bar}| {percent:.1f}% ({current}/{total})', end='', flush=True)
+        
+        # Print newline when complete
+        if current >= total:
+            print()
+    
     def optimize_contour_path(self, contours):
         """Optimize drawing order to minimize travel."""
         if not contours:
@@ -407,6 +425,7 @@ class VerticalDrawingRobot:
             contours = self.optimize_contour_path(contours)
         
         print(f"Found {len(contours)} contours to draw.")
+        print("="*60)  # Separator line
         
         # Move to safe starting position
         self.go_to_home_position()
@@ -416,6 +435,7 @@ class VerticalDrawingRobot:
         
         total_contours = len(contours)
         contours_drawn = 0
+        start_time = time.time()
         
         for i, contour in enumerate(contours):
             if len(contour) < 2:
@@ -423,14 +443,17 @@ class VerticalDrawingRobot:
             
             # Rest interval
             if REST_INTERVAL > 0 and contours_drawn > 0 and contours_drawn % REST_INTERVAL == 0:
-                print(f"\\nResting for {REST_DURATION_S} seconds...")
+                print()  # New line before rest message
+                print(f"\\n💤 Resting for {REST_DURATION_S} seconds...")
                 self.gentle_pen_up()
                 self.go_to_home_position()
                 time.sleep(REST_DURATION_S)
                 self.mc.send_coords(initial_coords, TRAVEL_SPEED, 0)
                 time.sleep(2)
+                print()  # Resume drawing message
             
-            print(f"Drawing contour {i+1}/{total_contours}...")
+            # Update progress bar
+            self.print_progress_bar(i+1, total_contours, prefix="Drawing")
             
             # Convert first point to mm
             start_point_px = contour[0][0]
@@ -454,7 +477,14 @@ class VerticalDrawingRobot:
             self.gentle_pen_up()
             contours_drawn += 1
         
-        print("\\nDrawing complete!")
+        # Final progress bar update and completion message
+        print()  # New line after progress bar
+        elapsed_time = time.time() - start_time
+        print("="*60)
+        print(f"\\n✓ Drawing complete!")
+        print(f"  Total contours drawn: {contours_drawn}")
+        print(f"  Time elapsed: {elapsed_time//60:.0f}m {elapsed_time%60:.0f}s")
+        print("="*60)
         self.go_to_home_position()
     
     def run(self):

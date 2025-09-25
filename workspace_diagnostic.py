@@ -23,8 +23,8 @@ class WorkspaceDiagnostic:
         
         # Known good positions from your working code
         self.KNOWN_GOOD = {
-            'origin': [205.1, -85.3, 110.2],
-            'orientation': [180, -90, -90]
+            'origin': [180.0, -80.0, 120.0],
+            'orientation': [90, -90, 135]  # 90° left rotation, 135° pen holder
         }
     
     def test_position(self, x, y, z, rx=180, ry=-90, rz=-90, timeout=3):
