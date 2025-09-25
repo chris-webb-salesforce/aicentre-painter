@@ -71,6 +71,20 @@ class HorizontalTableDrawingRobot:
             print(f"\\n--- ERROR ---")
             print(f"Failed to connect to robot: {e}")
             sys.exit(1)
+        
+        print("Loading face detection model...")
+        self.face_cascade = cv2.CascadeClassifier(HAAR_CASCADE_PATH)
+        
+        # Orientation for flat table drawing with pen pointing straight down
+        # [RX, RY, RZ] - pen holder rotation controlled by J6 joint position
+        self.DRAWING_ORIENTATION = [180, 0, 0]
+        
+        # Track current pen state
+        self.pen_is_down = False
+        self.current_position = None
+        
+        # Desired J6 angle for pen holder
+        self.DESIRED_J6_ANGLE = 45
     
     def force_j6_angle(self):
         """Force J6 to the desired angle while maintaining current position."""
