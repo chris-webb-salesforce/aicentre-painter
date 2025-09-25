@@ -74,8 +74,9 @@ class VerticalDrawingRobot:
         print("Loading face detection model...")
         self.face_cascade = cv2.CascadeClassifier(HAAR_CASCADE_PATH)
         
-        # Stable orientation for vertical drawing (pen pointing toward wall)
-        self.DRAWING_ORIENTATION = [180, -90, -90]
+        # Stable orientation for vertical drawing with 45° pen holder rotation
+        # [RX, RY, RZ] - RZ=45 accounts for pen holder orientation
+        self.DRAWING_ORIENTATION = [180, -90, 45]
         
         # Track current pen state
         self.pen_is_down = False
@@ -211,16 +212,26 @@ class VerticalDrawingRobot:
         self.current_position = [x2, z2]
     
     def go_to_home_position(self):
-        """Move to safe home position."""
-        print("Moving to home position...")
+        """Move to drawing start position (previously home)."""
+        print("Moving to drawing start position...")
         self.gentle_pen_up()
-        self.mc.send_angles([0, 0, 0, 0, 90, 0], 40)
+        # Position robot ready for drawing with pen holder at 45°
+        # This positions the arm ready to approach the drawing surface
+        initial_coords = [ORIGIN_X, PEN_RETRACT_Y, ORIGIN_Z] + self.DRAWING_ORIENTATION
+        self.mc.send_coords(initial_coords, 40, 0)
         time.sleep(3)
     
     def go_to_photo_position(self):
         """Move to photo capture position."""
         print("Moving to photo position...")
         self.mc.send_angles([0, -45, -45, 0, 90, 0], 40)
+        time.sleep(3)
+    
+    def go_to_safe_position(self):
+        """Move to neutral safe position when not drawing."""
+        print("Moving to safe neutral position...")
+        self.gentle_pen_up()
+        self.mc.send_angles([0, 0, 0, 0, 90, 45], 40)  # Note: J6 at 45° for pen holder
         time.sleep(3)
     
     def test_drawing_area(self):
