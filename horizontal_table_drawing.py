@@ -24,14 +24,14 @@ PEN_RETRACT_Z = ORIGIN_Z + 30  # Safe height above paper
 
 # --- Movement Control Settings ---
 # Speed settings for different operations
-APPROACH_SPEED = 20  # Slow speed when approaching paper
-DRAWING_SPEED = 25  # Speed while drawing
-LIFT_SPEED = 35  # Speed when lifting pen
-TRAVEL_SPEED = 50  # Speed for non-drawing movements
+APPROACH_SPEED = 15  # Slower speed when approaching paper
+DRAWING_SPEED = 20  # Slower speed while drawing for better quality
+LIFT_SPEED = 30  # Speed when lifting pen
+TRAVEL_SPEED = 40  # Speed for non-drawing movements
 
 # Movement interpolation settings
-INTERPOLATION_POINTS = 3  # Number of intermediate points for smooth curves
-MIN_SEGMENT_LENGTH = 2  # Minimum length in mm for segment subdivision
+INTERPOLATION_POINTS = 5  # More intermediate points for smoother curves
+MIN_SEGMENT_LENGTH = 1.5  # Smaller segments for better detail
 
 # --- Force Protection Settings ---
 MAX_DRAWING_FORCE = 5  # Maximum force to apply (robot units)
@@ -71,17 +71,32 @@ class HorizontalTableDrawingRobot:
             print(f"\\n--- ERROR ---")
             print(f"Failed to connect to robot: {e}")
             sys.exit(1)
+    
+    def force_j6_angle(self):
+        """Force J6 to the desired angle while maintaining current position."""
+        try:
+            current_joints = self.mc.get_angles()
+            if current_joints and len(current_joints) >= 6:
+                # Keep all joints the same except J6
+                current_joints[5] = self.DESIRED_J6_ANGLE  # J6 is index 5 (0-based)
+                self.mc.send_angles(current_joints, 20)
+                time.sleep(0.2)
+        except:
+            pass  # Ignore errors, continue drawing
         
         print("Loading face detection model...")
         self.face_cascade = cv2.CascadeClassifier(HAAR_CASCADE_PATH)
         
-        # Orientation for flat table drawing with pen pointing down
-        # [RX, RY, RZ] - RZ=135 accounts for pen holder orientation
-        self.DRAWING_ORIENTATION = [180, 90, 135]
+        # Orientation for flat table drawing with pen pointing straight down
+        # [RX, RY, RZ] - pen holder rotation controlled by J6 joint position
+        self.DRAWING_ORIENTATION = [180, 0, 0]
         
         # Track current pen state
         self.pen_is_down = False
         self.current_position = None
+        
+        # Desired J6 angle for pen holder
+        self.DESIRED_J6_ANGLE = 45
         
     def calibrate_pen_pressure(self):
         """Interactive calibration to find optimal pen pressure."""
@@ -160,15 +175,18 @@ class HorizontalTableDrawingRobot:
             
         # First move to position above the paper
         self.mc.send_coords([x, y, PEN_RETRACT_Z] + self.DRAWING_ORIENTATION, TRAVEL_SPEED, 0)
-        time.sleep(0.5)
+        time.sleep(0.8)  # Longer delay for position settling
+        self.force_j6_angle()  # Ensure pen holder angle
         
         # Approach slowly to contact position
         self.smooth_approach([x, y, PEN_CONTACT_Z] + self.DRAWING_ORIENTATION, APPROACH_SPEED)
-        time.sleep(0.2)
+        time.sleep(0.3)
+        self.force_j6_angle()  # Maintain pen holder angle
         
         # Apply gentle drawing pressure
         self.mc.send_coords([x, y, PEN_DRAWING_Z] + self.DRAWING_ORIENTATION, APPROACH_SPEED // 2, 0)
-        time.sleep(0.2)
+        time.sleep(0.4)  # Longer delay for pressure settling
+        self.force_j6_angle()  # Ensure pen holder angle
         
         self.pen_is_down = True
         self.current_position = [x, y]
@@ -182,11 +200,13 @@ class HorizontalTableDrawingRobot:
         if current:
             # First reduce pressure
             self.mc.send_coords([current[0], current[1], PEN_CONTACT_Z] + self.DRAWING_ORIENTATION, LIFT_SPEED, 0)
-            time.sleep(0.1)
+            time.sleep(0.2)
+            self.force_j6_angle()
             
             # Then retract
             self.mc.send_coords([current[0], current[1], PEN_RETRACT_Z] + self.DRAWING_ORIENTATION, LIFT_SPEED, 0)
-            time.sleep(0.3)
+            time.sleep(0.5)
+            self.force_j6_angle()
         
         self.pen_is_down = False
     
@@ -200,6 +220,8 @@ class HorizontalTableDrawingRobot:
         if distance < MIN_SEGMENT_LENGTH:
             # Direct movement for short segments
             self.mc.send_coords([x2, y2, PEN_DRAWING_Z] + self.DRAWING_ORIENTATION, DRAWING_SPEED, 0)
+            time.sleep(0.1)  # Increased delay
+            self.force_j6_angle()  # Maintain pen angle
         else:
             # Interpolate for smooth curves
             num_points = max(2, int(distance / MIN_SEGMENT_LENGTH))
@@ -208,7 +230,10 @@ class HorizontalTableDrawingRobot:
                 x = x1 + (x2 - x1) * ratio
                 y = y1 + (y2 - y1) * ratio
                 self.mc.send_coords([x, y, PEN_DRAWING_Z] + self.DRAWING_ORIENTATION, DRAWING_SPEED, 0)
-                time.sleep(0.05)
+                time.sleep(0.08)  # Increased delay for smoother drawing
+                # Force J6 angle every few points to avoid drift
+                if i % 3 == 0:  # Every 3rd point
+                    self.force_j6_angle()
         
         self.current_position = [x2, y2]
     
@@ -220,6 +245,7 @@ class HorizontalTableDrawingRobot:
         initial_coords = [ORIGIN_X, ORIGIN_Y, PEN_RETRACT_Z] + self.DRAWING_ORIENTATION
         self.mc.send_coords(initial_coords, 40, 0)
         time.sleep(3)
+        self.force_j6_angle()  # Ensure correct pen holder angle
     
     def go_to_photo_position(self):
         """Move to photo capture position."""
@@ -231,7 +257,7 @@ class HorizontalTableDrawingRobot:
         """Move to neutral safe position when not drawing."""
         print("Moving to safe neutral position...")
         self.gentle_pen_up()
-        self.mc.send_angles([0, 0, 0, 0, 90, 135], 40)  # Note: J6 at 135° for pen holder
+        self.mc.send_angles([0, 0, 0, 0, 90, self.DESIRED_J6_ANGLE], 40)  # J6 at desired angle
         time.sleep(3)
     
     def test_drawing_area(self):
