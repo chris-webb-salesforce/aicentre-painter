@@ -60,6 +60,12 @@ CAMERA_INDEX = 0
 class VerticalDrawingRobot:
     def __init__(self):
         print("Initializing Vertical Drawing Robot...")
+        
+        # Initialize attributes first (before potential exit)
+        self.pen_is_down = False
+        self.current_position = None
+        self.DRAWING_ORIENTATION = [180, 0, 135]
+        
         try:
             self.mc = MyCobot320(SERIAL_PORT, BAUD_RATE)
             time.sleep(2)  # Give robot time to initialize
@@ -74,14 +80,6 @@ class VerticalDrawingRobot:
         
         print("Loading face detection model...")
         self.face_cascade = cv2.CascadeClassifier(HAAR_CASCADE_PATH)
-        
-        # Orientation for flat table drawing with pen pointing down
-        # [RX, RY, RZ] - RZ=135 accounts for pen holder orientation
-        self.DRAWING_ORIENTATION = [180, 0, 135]
-        
-        # Track current pen state
-        self.pen_is_down = False
-        self.current_position = None
         
     def calibrate_pen_pressure(self):
         """Interactive calibration to find optimal pen pressure."""
