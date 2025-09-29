@@ -268,29 +268,37 @@ class RobotController:
             try:
                 # Check if robot is in motion using built-in method
                 if hasattr(self.mc, 'is_in_position') and callable(self.mc.is_in_position):
-                    # Use native method if available
-                    in_position = self.mc.is_in_position()
-                    if in_position:
-                        stable_readings += 1
-                        if stable_readings >= required_stable_readings:
-                            return True
-                    else:
-                        stable_readings = 0
-                else:
-                    # Fallback: check position stability manually
-                    current_pos = self.mc.get_coords()
-                    if current_pos and len(current_pos) >= 3:
-                        if last_position:
-                            # Calculate movement between readings
-                            movement = np.sqrt(sum((current_pos[i] - last_position[i])**2 for i in range(3)))
-                            if movement < 0.1:  # Very small movement threshold
+                    try:
+                        # Try different parameter formats for is_in_position
+                        current_pos = self.mc.get_coords()
+                        if current_pos:
+                            in_position = self.mc.is_in_position(current_pos, error=1.0)
+                            if in_position:
                                 stable_readings += 1
                                 if stable_readings >= required_stable_readings:
-                                    time.sleep(0.02)  # Final settling delay
                                     return True
                             else:
                                 stable_readings = 0
-                        last_position = current_pos[:]
+                        else:
+                            stable_readings = 0
+                    except Exception:
+                        # Fallback to manual position checking
+                        pass
+                
+                # Manual position stability check
+                current_pos = self.mc.get_coords()
+                if current_pos and len(current_pos) >= 3:
+                    if last_position:
+                        # Calculate movement between readings
+                        movement = np.sqrt(sum((current_pos[i] - last_position[i])**2 for i in range(3)))
+                        if movement < 0.1:  # Very small movement threshold
+                            stable_readings += 1
+                            if stable_readings >= required_stable_readings:
+                                time.sleep(0.02)  # Final settling delay
+                                return True
+                        else:
+                            stable_readings = 0
+                    last_position = current_pos[:]
                 
                 time.sleep(0.02)  # Fast polling
                 
