@@ -4,6 +4,9 @@ from pymycobot import MyCobot320
 import numpy as np
 import sys
 import os
+import json
+import csv
+from datetime import datetime
 
 # --- Workspace Calibration for HORIZONTAL Drawing ---
 # The (X, Y, Z) coordinate of the top-left corner of your drawing area on flat table
@@ -345,6 +348,28 @@ class HorizontalTableDrawingRobot:
         self.mc.send_angles([0, 0, 0, 0, 90, self.DESIRED_J6_ANGLE], 40)  # J6 at desired angle
         time.sleep(3)
     
+    def test_coordinate_system(self):
+        """Test coordinate system and transformations."""
+        print("\n--- COORDINATE SYSTEM TEST ---")
+        
+        # Run coordinate transformation test
+        self.verify_coordinate_transformation()
+        
+        # Test a few sample points
+        print("\nTesting sample trajectory points:")
+        test_contours = [
+            [(ORIGIN_X + 10, ORIGIN_Y + 10), (ORIGIN_X + 30, ORIGIN_Y + 20)],  # Small line
+            [(ORIGIN_X + 50, ORIGIN_Y + 50), (ORIGIN_X + 70, ORIGIN_Y + 70)],  # Diagonal line
+        ]
+        
+        if self.validate_trajectory_points(test_contours):
+            print("✅ Coordinate system test passed")
+        else:
+            print("❌ Coordinate system test failed")
+        
+        # Show trajectory summary for test points
+        self.create_trajectory_summary(test_contours)
+    
     def test_drawing_area(self):
         """Test the drawing area with gentle movements."""
         print("\\n--- TESTING DRAWING AREA ---")
@@ -629,6 +654,515 @@ class HorizontalTableDrawingRobot:
         
         return preview_img
 
+    def validate_trajectory_points(self, contours):
+        """Validate that all trajectory points are within safe bounds."""
+        print("\n--- TRAJECTORY VALIDATION ---")
+        
+        total_points = 0
+        out_of_bounds = 0
+        min_x, max_x = float('inf'), float('-inf')
+        min_y, max_y = float('inf'), float('-inf')
+        
+        # Define safe workspace bounds (with safety margins)
+        workspace_min_x = ORIGIN_X - 10  # 10mm safety margin
+        workspace_max_x = ORIGIN_X + DRAWING_AREA_WIDTH_MM + 10
+        workspace_min_y = ORIGIN_Y - 10
+        workspace_max_y = ORIGIN_Y + DRAWING_AREA_HEIGHT_MM + 10
+        
+        for i, contour_points in enumerate(contours):
+            for j, (x, y) in enumerate(contour_points):
+                total_points += 1
+                
+                # Track actual bounds
+                min_x, max_x = min(min_x, x), max(max_x, x)
+                min_y, max_y = min(min_y, y), max(max_y, y)
+                
+                # Check if point is out of bounds
+                if (x < workspace_min_x or x > workspace_max_x or 
+                    y < workspace_min_y or y > workspace_max_y):
+                    out_of_bounds += 1
+                    print(f"⚠️  Out of bounds: Contour {i+1}, Point {j+1}: ({x:.2f}, {y:.2f})")
+        
+        print(f"✓ Total trajectory points: {total_points}")
+        print(f"✓ Actual bounds: X=[{min_x:.1f}, {max_x:.1f}] Y=[{min_y:.1f}, {max_y:.1f}]")
+        print(f"✓ Safe workspace: X=[{workspace_min_x:.1f}, {workspace_max_x:.1f}] Y=[{workspace_min_y:.1f}, {workspace_max_y:.1f}]")
+        
+        if out_of_bounds > 0:
+            print(f"❌ WARNING: {out_of_bounds} points out of bounds!")
+            return False
+        else:
+            print("✅ All points within safe workspace bounds")
+            return True
+
+    def verify_coordinate_transformation(self):
+        """Verify pixel to mm coordinate transformation is correct."""
+        print("\n--- COORDINATE TRANSFORMATION TEST ---")
+        
+        # Test corner points
+        test_points_px = [
+            (0, 0),  # Top-left pixel
+            (IMAGE_WIDTH_PX-1, 0),  # Top-right pixel
+            (IMAGE_WIDTH_PX-1, IMAGE_HEIGHT_PX-1),  # Bottom-right pixel
+            (0, IMAGE_HEIGHT_PX-1),  # Bottom-left pixel
+            (IMAGE_WIDTH_PX//2, IMAGE_HEIGHT_PX//2),  # Center pixel
+        ]
+        
+        print("Pixel → MM → Pixel conversion test:")
+        print("Original Pixel → MM Coords → Back to Pixel")
+        
+        for px_x, px_y in test_points_px:
+            # Convert pixel to mm (same as in preprocess_contours)
+            mm_x = ORIGIN_X + (px_x / IMAGE_WIDTH_PX) * DRAWING_AREA_WIDTH_MM
+            mm_y = ORIGIN_Y + DRAWING_AREA_HEIGHT_MM - (px_y / IMAGE_HEIGHT_PX) * DRAWING_AREA_HEIGHT_MM
+            
+            # Convert back to pixel (same as in create_contour_preview)
+            back_px_x = int((mm_x - ORIGIN_X) / DRAWING_AREA_WIDTH_MM * IMAGE_WIDTH_PX)
+            back_px_y = int(IMAGE_HEIGHT_PX - (mm_y - ORIGIN_Y) / DRAWING_AREA_HEIGHT_MM * IMAGE_HEIGHT_PX)
+            
+            error_x = abs(px_x - back_px_x)
+            error_y = abs(px_y - back_px_y)
+            
+            print(f"({px_x:3d}, {px_y:3d}) → ({mm_x:6.1f}, {mm_y:6.1f}) → ({back_px_x:3d}, {back_px_y:3d}) [Error: {error_x}, {error_y}]")
+        
+        # Test physical workspace corners
+        print("\nPhysical workspace corners (MM coordinates):")
+        corners_mm = [
+            (ORIGIN_X, ORIGIN_Y),  # Origin
+            (ORIGIN_X + DRAWING_AREA_WIDTH_MM, ORIGIN_Y),  # Top-right
+            (ORIGIN_X + DRAWING_AREA_WIDTH_MM, ORIGIN_Y + DRAWING_AREA_HEIGHT_MM),  # Bottom-right  
+            (ORIGIN_X, ORIGIN_Y + DRAWING_AREA_HEIGHT_MM),  # Bottom-left
+        ]
+        
+        for i, (mm_x, mm_y) in enumerate(corners_mm):
+            print(f"Corner {i+1}: ({mm_x:6.1f}, {mm_y:6.1f}) mm")
+
+    def debug_trajectory_segment(self, from_point, to_point, segment_id):
+        """Debug output for individual trajectory segments."""
+        x1, y1 = from_point
+        x2, y2 = to_point
+        distance = np.sqrt((x2 - x1)**2 + (y2 - y1)**2)
+        
+        print(f"Segment {segment_id}: ({x1:.2f}, {y1:.2f}) → ({x2:.2f}, {y2:.2f}) [Dist: {distance:.2f}mm]")
+        
+        # Check for excessive jumps
+        if distance > 50:  # More than 50mm jump
+            print(f"  ⚠️  Large jump detected: {distance:.2f}mm")
+        
+        # Check Z bounds
+        z_coords = [PEN_RETRACT_Z, PEN_DRAWING_Z, self.current_z_depth]
+        for z_name, z_val in zip(["RETRACT", "DRAWING", "CURRENT"], z_coords):
+            if z_val < ORIGIN_Z - 10 or z_val > ORIGIN_Z + 50:
+                print(f"  ⚠️  Unusual {z_name} Z: {z_val:.2f}mm")
+
+    def create_trajectory_summary(self, contours):
+        """Create a summary of the trajectory for review."""
+        print("\n" + "="*50)
+        print("TRAJECTORY SUMMARY")
+        print("="*50)
+        
+        total_segments = sum(len(c)-1 for c in contours if len(c) > 1)
+        total_distance = 0
+        max_jump = 0
+        
+        for i, contour_points in enumerate(contours):
+            contour_distance = 0
+            if len(contour_points) > 1:
+                for j in range(1, len(contour_points)):
+                    x1, y1 = contour_points[j-1]
+                    x2, y2 = contour_points[j]
+                    seg_dist = np.sqrt((x2 - x1)**2 + (y2 - y1)**2)
+                    contour_distance += seg_dist
+                
+                total_distance += contour_distance
+                print(f"Contour {i+1:3d}: {len(contour_points):3d} points, {contour_distance:6.1f}mm length")
+        
+        # Calculate travel distances between contours
+        travel_distance = 0
+        for i in range(len(contours)-1):
+            if len(contours[i]) > 0 and len(contours[i+1]) > 0:
+                end_point = contours[i][-1]
+                start_point = contours[i+1][0]
+                travel_dist = np.sqrt((start_point[0] - end_point[0])**2 + 
+                                     (start_point[1] - end_point[1])**2)
+                travel_distance += travel_dist
+                max_jump = max(max_jump, travel_dist)
+        
+        print("-"*50)
+        print(f"Total contours:     {len(contours)}")
+        print(f"Total segments:     {total_segments}")
+        print(f"Drawing distance:   {total_distance:.1f}mm")
+        print(f"Travel distance:    {travel_distance:.1f}mm")
+        print(f"Max travel jump:    {max_jump:.1f}mm")
+        print(f"Estimated time:     {(total_segments * 0.1 + len(contours) * 0.5):.1f}s")
+        print("="*50)
+
+    def export_trajectory_for_pybullet(self, contours, export_format="json"):
+        """Export trajectory data for PyBullet simulation."""
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        
+        if export_format.lower() == "json":
+            return self._export_json_trajectory(contours, timestamp)
+        elif export_format.lower() == "csv":
+            return self._export_csv_trajectory(contours, timestamp)
+        else:
+            print(f"Unknown export format: {export_format}")
+            return None
+    
+    def _export_json_trajectory(self, contours, timestamp):
+        """Export trajectory as JSON for PyBullet simulation."""
+        filename = f"trajectory_export_{timestamp}.json"
+        
+        # Create trajectory data structure
+        trajectory_data = {
+            "metadata": {
+                "export_time": timestamp,
+                "robot_type": "MyCobot320",
+                "coordinate_system": "cartesian_mm",
+                "workspace": {
+                    "origin_x": ORIGIN_X,
+                    "origin_y": ORIGIN_Y, 
+                    "origin_z": ORIGIN_Z,
+                    "width_mm": DRAWING_AREA_WIDTH_MM,
+                    "height_mm": DRAWING_AREA_HEIGHT_MM
+                },
+                "drawing_parameters": {
+                    "pen_retract_z": PEN_RETRACT_Z,
+                    "pen_drawing_z": PEN_DRAWING_Z,
+                    "drawing_speed": DRAWING_SPEED,
+                    "approach_speed": APPROACH_SPEED,
+                    "travel_speed": TRAVEL_SPEED
+                },
+                "orientation": self.DRAWING_ORIENTATION
+            },
+            "trajectory": {
+                "total_contours": len(contours),
+                "commands": []
+            }
+        }
+        
+        command_id = 0
+        
+        for contour_idx, contour_points in enumerate(contours):
+            if len(contour_points) < 2:
+                continue
+                
+            # Move to start position (pen up)
+            start_x, start_y = contour_points[0]
+            trajectory_data["trajectory"]["commands"].append({
+                "id": command_id,
+                "type": "move_to_position",
+                "contour_id": contour_idx,
+                "position": [start_x, start_y, PEN_RETRACT_Z],
+                "orientation": self.DRAWING_ORIENTATION,
+                "speed": TRAVEL_SPEED,
+                "pen_down": False,
+                "description": f"Move to start of contour {contour_idx + 1}"
+            })
+            command_id += 1
+            
+            # Pen down
+            trajectory_data["trajectory"]["commands"].append({
+                "id": command_id,
+                "type": "pen_down",
+                "contour_id": contour_idx,
+                "position": [start_x, start_y, PEN_DRAWING_Z],
+                "orientation": self.DRAWING_ORIENTATION,
+                "speed": APPROACH_SPEED,
+                "pen_down": True,
+                "description": f"Lower pen for contour {contour_idx + 1}"
+            })
+            command_id += 1
+            
+            # Draw contour segments
+            for point_idx in range(1, len(contour_points)):
+                x, y = contour_points[point_idx]
+                trajectory_data["trajectory"]["commands"].append({
+                    "id": command_id,
+                    "type": "draw_line",
+                    "contour_id": contour_idx,
+                    "position": [x, y, PEN_DRAWING_Z],
+                    "orientation": self.DRAWING_ORIENTATION,
+                    "speed": DRAWING_SPEED,
+                    "pen_down": True,
+                    "description": f"Draw to point {point_idx} in contour {contour_idx + 1}"
+                })
+                command_id += 1
+            
+            # Pen up
+            end_x, end_y = contour_points[-1]
+            trajectory_data["trajectory"]["commands"].append({
+                "id": command_id,
+                "type": "pen_up",
+                "contour_id": contour_idx,
+                "position": [end_x, end_y, PEN_RETRACT_Z],
+                "orientation": self.DRAWING_ORIENTATION,
+                "speed": LIFT_SPEED,
+                "pen_down": False,
+                "description": f"Lift pen after contour {contour_idx + 1}"
+            })
+            command_id += 1
+        
+        # Save to file
+        try:
+            with open(filename, 'w') as f:
+                json.dump(trajectory_data, f, indent=2)
+            print(f"✅ Trajectory exported to {filename}")
+            print(f"   Total commands: {len(trajectory_data['trajectory']['commands'])}")
+            return filename
+        except Exception as e:
+            print(f"❌ Failed to export JSON: {e}")
+            return None
+    
+    def _export_csv_trajectory(self, contours, timestamp):
+        """Export trajectory as CSV for simple PyBullet loading."""
+        filename = f"trajectory_commands_{timestamp}.csv"
+        
+        try:
+            with open(filename, 'w', newline='') as csvfile:
+                fieldnames = ['command_id', 'type', 'contour_id', 'x', 'y', 'z', 
+                             'rx', 'ry', 'rz', 'speed', 'pen_down', 'description']
+                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                writer.writeheader()
+                
+                command_id = 0
+                
+                for contour_idx, contour_points in enumerate(contours):
+                    if len(contour_points) < 2:
+                        continue
+                    
+                    # Move to start position
+                    start_x, start_y = contour_points[0]
+                    writer.writerow({
+                        'command_id': command_id,
+                        'type': 'move_to_position',
+                        'contour_id': contour_idx,
+                        'x': start_x, 'y': start_y, 'z': PEN_RETRACT_Z,
+                        'rx': self.DRAWING_ORIENTATION[0],
+                        'ry': self.DRAWING_ORIENTATION[1], 
+                        'rz': self.DRAWING_ORIENTATION[2],
+                        'speed': TRAVEL_SPEED,
+                        'pen_down': 0,
+                        'description': f'Move to start of contour {contour_idx + 1}'
+                    })
+                    command_id += 1
+                    
+                    # Pen down
+                    writer.writerow({
+                        'command_id': command_id,
+                        'type': 'pen_down',
+                        'contour_id': contour_idx,
+                        'x': start_x, 'y': start_y, 'z': PEN_DRAWING_Z,
+                        'rx': self.DRAWING_ORIENTATION[0],
+                        'ry': self.DRAWING_ORIENTATION[1],
+                        'rz': self.DRAWING_ORIENTATION[2], 
+                        'speed': APPROACH_SPEED,
+                        'pen_down': 1,
+                        'description': f'Lower pen for contour {contour_idx + 1}'
+                    })
+                    command_id += 1
+                    
+                    # Draw segments
+                    for point_idx in range(1, len(contour_points)):
+                        x, y = contour_points[point_idx]
+                        writer.writerow({
+                            'command_id': command_id,
+                            'type': 'draw_line', 
+                            'contour_id': contour_idx,
+                            'x': x, 'y': y, 'z': PEN_DRAWING_Z,
+                            'rx': self.DRAWING_ORIENTATION[0],
+                            'ry': self.DRAWING_ORIENTATION[1],
+                            'rz': self.DRAWING_ORIENTATION[2],
+                            'speed': DRAWING_SPEED,
+                            'pen_down': 1,
+                            'description': f'Draw to point {point_idx} in contour {contour_idx + 1}'
+                        })
+                        command_id += 1
+                    
+                    # Pen up
+                    end_x, end_y = contour_points[-1]
+                    writer.writerow({
+                        'command_id': command_id,
+                        'type': 'pen_up',
+                        'contour_id': contour_idx,
+                        'x': end_x, 'y': end_y, 'z': PEN_RETRACT_Z,
+                        'rx': self.DRAWING_ORIENTATION[0],
+                        'ry': self.DRAWING_ORIENTATION[1],
+                        'rz': self.DRAWING_ORIENTATION[2],
+                        'speed': LIFT_SPEED,
+                        'pen_down': 0,
+                        'description': f'Lift pen after contour {contour_idx + 1}'
+                    })
+                    command_id += 1
+            
+            print(f"✅ Trajectory exported to {filename}")
+            print(f"   Total commands: {command_id}")
+            return filename
+            
+        except Exception as e:
+            print(f"❌ Failed to export CSV: {e}")
+            return None
+
+    def create_pybullet_simulation_script(self, trajectory_file, script_name=None):
+        """Create a basic PyBullet simulation script template."""
+        if not script_name:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            script_name = f"pybullet_simulation_{timestamp}.py"
+        
+        script_content = f'''#!/usr/bin/env python3
+"""
+PyBullet simulation script for trajectory: {trajectory_file}
+Generated automatically from horizontal_table_drawing.py
+"""
+
+import pybullet as p
+import pybullet_data
+import json
+import time
+import numpy as np
+
+class RobotDrawingSimulation:
+    def __init__(self):
+        # Connect to PyBullet
+        self.physics_client = p.connect(p.GUI)
+        p.setAdditionalSearchPath(pybullet_data.getDataPath())
+        
+        # Set up simulation environment
+        p.setGravity(0, 0, -9.81)
+        p.loadURDF("plane.urdf", [0, 0, 0])
+        
+        # Load robot (adjust path to your robot URDF)
+        # self.robot_id = p.loadURDF("path/to/mycobot320.urdf", [0, 0, 0])
+        
+        # For now, use a simple marker
+        self.marker_id = p.loadURDF("sphere_small.urdf", [0, 0, 0.1])
+        p.changeVisualShape(self.marker_id, -1, rgbaColor=[1, 0, 0, 1])
+        
+        # Drawing surface
+        self.table_id = p.loadURDF("cube.urdf", 
+                                  [{ORIGIN_X/1000}, {ORIGIN_Y/1000}, {(ORIGIN_Z-50)/1000}],
+                                  globalScaling=0.001)
+        p.changeVisualShape(self.table_id, -1, rgbaColor=[0.8, 0.8, 0.8, 1])
+        
+        # Trajectory data
+        self.trajectory_data = None
+        self.pen_down = False
+        self.trajectory_lines = []  # Store drawn lines
+        
+    def load_trajectory(self, filename):
+        """Load trajectory from JSON file."""
+        try:
+            with open(filename, 'r') as f:
+                self.trajectory_data = json.load(f)
+            print(f"Loaded trajectory with {{len(self.trajectory_data['trajectory']['commands'])}} commands")
+            return True
+        except Exception as e:
+            print(f"Failed to load trajectory: {{e}}")
+            return False
+    
+    def execute_trajectory(self):
+        """Execute the loaded trajectory."""
+        if not self.trajectory_data:
+            print("No trajectory loaded!")
+            return
+        
+        commands = self.trajectory_data['trajectory']['commands']
+        prev_pos = None
+        
+        for cmd in commands:
+            # Convert mm to meters for PyBullet
+            pos = [cmd['position'][0]/1000, cmd['position'][1]/1000, cmd['position'][2]/1000]
+            
+            # Move marker to position
+            p.resetBasePositionAndOrientation(self.marker_id, pos, [0, 0, 0, 1])
+            
+            # Handle pen state
+            if cmd['type'] == 'pen_down':
+                self.pen_down = True
+                p.changeVisualShape(self.marker_id, -1, rgbaColor=[0, 1, 0, 1])  # Green when drawing
+            elif cmd['type'] == 'pen_up':
+                self.pen_down = False
+                p.changeVisualShape(self.marker_id, -1, rgbaColor=[1, 0, 0, 1])  # Red when not drawing
+            
+            # Draw line if pen is down and we have a previous position
+            if self.pen_down and prev_pos and cmd['type'] == 'draw_line':
+                line_id = p.addUserDebugLine(prev_pos, pos, [0, 0, 1], 2)  # Blue line
+                self.trajectory_lines.append(line_id)
+            
+            prev_pos = pos
+            
+            # Step simulation
+            p.stepSimulation()
+            time.sleep(0.01)  # Adjust for visualization speed
+            
+            print(f"Command {{cmd['id']}}: {{cmd['type']}} - {{cmd['description']}}")
+    
+    def run(self):
+        """Run the simulation."""
+        if self.load_trajectory("{trajectory_file}"):
+            print("Press Enter to start trajectory execution...")
+            input()
+            self.execute_trajectory()
+            print("Trajectory complete! Press Enter to exit...")
+            input()
+        
+        p.disconnect()
+
+if __name__ == "__main__":
+    sim = RobotDrawingSimulation()
+    sim.run()
+'''
+        
+        try:
+            with open(script_name, 'w') as f:
+                f.write(script_content)
+            print(f"✅ PyBullet simulation script created: {script_name}")
+            return script_name
+        except Exception as e:
+            print(f"❌ Failed to create simulation script: {e}")
+            return None
+
+    def _handle_trajectory_export(self, contours):
+        """Handle interactive trajectory export."""
+        print("\n--- TRAJECTORY EXPORT ---")
+        print("Choose export format:")
+        print("  1) JSON (recommended for PyBullet)")
+        print("  2) CSV (for spreadsheet analysis)")
+        print("  3) Both formats")
+        
+        choice = input("Enter choice (1-3): ").strip()
+        
+        exported_files = []
+        
+        if choice in ['1', '3']:
+            # Export JSON
+            json_file = self.export_trajectory_for_pybullet(contours, "json")
+            if json_file:
+                exported_files.append(json_file)
+        
+        if choice in ['2', '3']:
+            # Export CSV
+            csv_file = self.export_trajectory_for_pybullet(contours, "csv")
+            if csv_file:
+                exported_files.append(csv_file)
+        
+        if not exported_files:
+            print("No files exported.")
+            return
+        
+        # Offer to create PyBullet simulation script
+        if any(f.endswith('.json') for f in exported_files):
+            create_sim = input("Create PyBullet simulation script? (y/n): ").lower().strip()
+            if create_sim == 'y':
+                json_file = next(f for f in exported_files if f.endswith('.json'))
+                script_file = self.create_pybullet_simulation_script(json_file)
+                if script_file:
+                    exported_files.append(script_file)
+        
+        print(f"\n✅ Export complete! Files created:")
+        for file in exported_files:
+            print(f"   • {file}")
+        print("\nYou can now run the PyBullet simulation to test the trajectory.")
+
     def draw_sketch(self, sketch_image):
         """OPTIMIZED: Draw the sketch with performance improvements."""
         if sketch_image is None:
@@ -638,6 +1172,16 @@ class HorizontalTableDrawingRobot:
         # Preprocess all contours at once
         print("Preprocessing contours...")
         contours = self.preprocess_contours(sketch_image)
+        
+        # Validate trajectory points
+        if not self.validate_trajectory_points(contours):
+            print("❌ Trajectory validation failed! Please check workspace settings.")
+            response = input("Continue anyway? (y/N): ").lower().strip()
+            if response != 'y':
+                return
+        
+        # Create trajectory summary
+        self.create_trajectory_summary(contours)
         
         if OPTIMIZE_DRAWING_PATH:
             print("Optimizing path...")
@@ -669,7 +1213,8 @@ class HorizontalTableDrawingRobot:
         
         print("\nPreview Controls:")
         print("  'd' = Start drawing")
-        print("  's' = Save preview image") 
+        print("  's' = Save preview image")
+        print("  'e' = Export trajectory for PyBullet simulation") 
         print("  Any other key = Cancel drawing")
         
         key = cv2.waitKey(0)
@@ -679,6 +1224,11 @@ class HorizontalTableDrawingRobot:
             preview_filename = "drawing_preview.jpg"
             cv2.imwrite(preview_filename, preview_img)
             print(f"Preview saved as {preview_filename}")
+            print("Press 'd' to draw, 'e' to export, or any other key to cancel:")
+            key = cv2.waitKey(0)
+            cv2.destroyAllWindows()
+        elif key == ord('e'):
+            self._handle_trajectory_export(contours)
             print("Press 'd' to draw or any other key to cancel:")
             key = cv2.waitKey(0)
             cv2.destroyAllWindows()
@@ -743,6 +1293,11 @@ class HorizontalTableDrawingRobot:
             if optimal_y:
                 global PEN_DRAWING_Y
                 PEN_DRAWING_Y = optimal_y
+        
+        # Test coordinate system
+        coord_test = input("Would you like to test the coordinate system? (y/n): ").lower().strip()
+        if coord_test == 'y':
+            self.test_coordinate_system()
         
         # Test drawing area
         test = input("Would you like to test the drawing area? (y/n): ").lower().strip()
