@@ -245,11 +245,11 @@ class HorizontalTableDrawingRobot:
         approach_steps = 3
         for i in range(1, approach_steps + 1):
             z_position = PEN_RETRACT_Z - ((PEN_RETRACT_Z - PEN_DRAWING_Z) * (i / approach_steps))
-            self.mc.send_coords([x, y, z_position] + self.DRAWING_ORIENTATION, APPROACH_SPEED // 2, 0)
+            self.mc.send_coords([x, y, z_position] + self.DRAWING_ORIENTATION, int(APPROACH_SPEED // 2), 0)
             time.sleep(0.1)  # Small settling time between steps
         
         # Final positioning at drawing depth
-        self.mc.send_coords([x, y, PEN_DRAWING_Z] + self.DRAWING_ORIENTATION, APPROACH_SPEED // 3, 0)
+        self.mc.send_coords([x, y, PEN_DRAWING_Z] + self.DRAWING_ORIENTATION, int(APPROACH_SPEED // 3), 0)
         time.sleep(0.2)  # Final settling time
         
         self.pen_is_down = True
@@ -268,7 +268,7 @@ class HorizontalTableDrawingRobot:
             lift_steps = 2
             for i in range(1, lift_steps + 1):
                 z_position = self.current_z_depth + ((PEN_RETRACT_Z - self.current_z_depth) * (i / lift_steps))
-                self.mc.send_coords([current[0], current[1], z_position] + self.DRAWING_ORIENTATION, LIFT_SPEED // 2, 0)
+                self.mc.send_coords([current[0], current[1], z_position] + self.DRAWING_ORIENTATION, int(LIFT_SPEED // 2), 0)
                 time.sleep(0.08)
         
         self.pen_is_down = False
@@ -308,7 +308,7 @@ class HorizontalTableDrawingRobot:
                 
                 # Smooth speed ramping for better control
                 if i == 1 or i == num_points:
-                    speed = DRAWING_SPEED * 0.8  # Slower at segment endpoints
+                    speed = int(DRAWING_SPEED * 0.8)  # Slower at segment endpoints
                 else:
                     speed = DRAWING_SPEED
                 
