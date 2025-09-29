@@ -31,6 +31,7 @@ class RobotController:
         self.current_position = None
         self.current_z_depth = PEN_RETRACT_Z
         self.movement_counter = 0
+        self.single_line_mode = False  # Flag to disable Z compensation during continuous drawing
         
         # Force feedback monitoring
         self.last_force_check = time.time()
@@ -156,6 +157,10 @@ class RobotController:
         if len(coords) < 3:
             return coords
         
+        # Skip Z compensation during single-line drawing to avoid jumping
+        if self.single_line_mode and self.pen_is_down:
+            return coords
+        
         compensated_coords = coords.copy()
         x, y = coords[0], coords[1]
         
@@ -164,6 +169,16 @@ class RobotController:
         compensated_coords[2] += compensation
         
         return compensated_coords
+
+    def enable_single_line_mode(self):
+        """Enable single-line drawing mode (disables Z compensation during drawing)."""
+        self.single_line_mode = True
+        print("✅ Single-line mode enabled - Z compensation disabled during drawing")
+
+    def disable_single_line_mode(self):
+        """Disable single-line drawing mode (re-enables Z compensation)."""
+        self.single_line_mode = False
+        print("✅ Single-line mode disabled - Z compensation re-enabled")
 
     def validate_z_coordinate(self, z):
         """Validate Z coordinate for safety and clamp to safe range."""

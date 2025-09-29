@@ -205,6 +205,7 @@ class DrawingApplication:
         if single_line_mode:
             print("Converting to single continuous line...")
             contours = self.image_processor.create_single_line_path(contours)
+            self.robot.enable_single_line_mode()  # Disable Z compensation during drawing
         
         if single_line_mode:
             print(f"Drawing as single continuous line ({len(contours[0]) if contours else 0} points)...")
@@ -251,6 +252,11 @@ class DrawingApplication:
         print(f"  Time elapsed: {elapsed_time//60:.0f}m {elapsed_time%60:.0f}s")
         print(f"  Average: {elapsed_time/len(contours):.3f}s per contour")
         print("="*60)
+        
+        # Disable single-line mode if it was enabled
+        if single_line_mode:
+            self.robot.disable_single_line_mode()
+        
         self.robot.go_to_home_position()
 
     def create_new_drawing(self):
