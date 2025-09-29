@@ -288,6 +288,8 @@ class GCodeHandler:
         Comprehensive validation of generated G-code file.
         Checks for accuracy, safety, and best practices.
         """
+        import re
+        
         print(f"\nValidating G-code file: {filename}")
         
         issues = []
@@ -317,33 +319,40 @@ class GCodeHandler:
                     # Analyze movement commands
                     if command.startswith(("G0", "G1", "G00", "G01")):
                         move_commands += 1
-                        command_parts = command.split()
                         
-                        # Extract coordinates
-                        for part in command_parts[1:]:
-                            if part.startswith(("X", "x")):
-                                try:
-                                    x_val = float(part[1:])
-                                    coordinate_bounds["X"].append(x_val)
-                                except ValueError:
-                                    issues.append(f"Line {line_num}: Invalid X coordinate: {part}")
-                            elif part.startswith(("Y", "y")):
-                                try:
-                                    y_val = float(part[1:])
-                                    coordinate_bounds["Y"].append(y_val)
-                                except ValueError:
-                                    issues.append(f"Line {line_num}: Invalid Y coordinate: {part}")
-                            elif part.startswith(("Z", "z")):
-                                try:
-                                    z_val = float(part[1:])
-                                    coordinate_bounds["Z"].append(z_val)
-                                except ValueError:
-                                    issues.append(f"Line {line_num}: Invalid Z coordinate: {part}")
+                        # Extract coordinates using regex for proper G-code parsing
+                        # Find X coordinate
+                        x_match = re.search(r'[Xx]([-+]?\d*\.?\d+)', command)
+                        if x_match:
+                            try:
+                                x_val = float(x_match.group(1))
+                                coordinate_bounds["X"].append(x_val)
+                            except ValueError:
+                                issues.append(f"Line {line_num}: Invalid X coordinate")
+                        
+                        # Find Y coordinate
+                        y_match = re.search(r'[Yy]([-+]?\d*\.?\d+)', command)
+                        if y_match:
+                            try:
+                                y_val = float(y_match.group(1))
+                                coordinate_bounds["Y"].append(y_val)
+                            except ValueError:
+                                issues.append(f"Line {line_num}: Invalid Y coordinate")
+                        
+                        # Find Z coordinate
+                        z_match = re.search(r'[Zz]([-+]?\d*\.?\d+)', command)
+                        if z_match:
+                            try:
+                                z_val = float(z_match.group(1))
+                                coordinate_bounds["Z"].append(z_val)
+                            except ValueError:
+                                issues.append(f"Line {line_num}: Invalid Z coordinate")
                     
                     # Track feedrate changes
-                    if command.startswith("F"):
+                    f_match = re.search(r'[Ff]([-+]?\d*\.?\d+)', command)
+                    if f_match:
                         try:
-                            new_feedrate = int(command[1:])
+                            new_feedrate = int(float(f_match.group(1)))
                             if new_feedrate != current_feedrate:
                                 feedrate_changes += 1
                                 current_feedrate = new_feedrate
@@ -354,7 +363,7 @@ class GCodeHandler:
                                 elif new_feedrate > 5000:
                                     issues.append(f"Line {line_num}: Very fast feedrate ({new_feedrate}), may reduce accuracy")
                         except ValueError:
-                            issues.append(f"Line {line_num}: Invalid feedrate: {command}")
+                            issues.append(f"Line {line_num}: Invalid feedrate: {f_match.group(0)}")
                     
         except Exception as e:
             issues.append(f"Failed to read file: {e}")
@@ -667,7 +676,7 @@ class GCodeHandler:
                     # Convert to relative coordinates from home position
                     rel_x = start_x - ORIGIN_X
                     rel_y = start_y - ORIGIN_Y
-                    f.write(f"G0 X{rel_x:.3f} Y{rel_y:.3f} Z5.0\n")  # 5mm above surface
+                    f.write(f"G0 X{rel_x:.{GCODE_DECIMAL_PLACES}f} Y{rel_y:.{GCODE_DECIMAL_PLACES}f} Z5.0\n")  # 5mm above surface
                     
                     # Lower pen
                     f.write(f"G0 Z0.0\n")  # Touch surface
@@ -677,7 +686,7 @@ class GCodeHandler:
                         x, y = contour_points[point_idx]
                         rel_x = x - ORIGIN_X
                         rel_y = y - ORIGIN_Y
-                        f.write(f"G1 X{rel_x:.3f} Y{rel_y:.3f}\n")
+                        f.write(f"G1 X{rel_x:.{GCODE_DECIMAL_PLACES}f} Y{rel_y:.{GCODE_DECIMAL_PLACES}f}\n")
                     
                     # Lift pen
                     f.write(f"G0 Z5.0\n")
