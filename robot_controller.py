@@ -42,7 +42,8 @@ class RobotController:
         self.position_tolerance = POSITION_TOLERANCE
         self.position_check_interval = POSITION_CHECK_INTERVAL
         self.last_command_time = 0
-        self.min_command_interval = 0.05  # Minimum 50ms between commands
+        self.min_command_interval = 0.1  # Minimum 100ms between commands (slower to reduce jumpiness)
+        self.last_coords = None  # For distance-based timing
         
         # Enable fresh mode for real-time commands (reduces command skipping)
         try:
@@ -401,9 +402,20 @@ class RobotController:
                 success = self.wait_for_movement_completion(coords[:3], timeout)
                 return success
             else:
-                # Use smart fallback timing if sync is disabled
-                movement_time = max(0.05, min(0.5, speed / 200.0))  # Faster estimates
+                # Use improved fallback timing if sync is disabled
+                # Calculate time based on distance and speed for smoother movement
+                if hasattr(self, 'last_coords') and self.last_coords:
+                    try:
+                        distance = np.sqrt(sum((coords[i] - self.last_coords[i])**2 for i in range(3)))
+                        # Time = distance / speed, with reasonable bounds
+                        movement_time = max(0.1, min(1.0, distance / max(speed, 10)))
+                    except:
+                        movement_time = 0.2  # Default fallback
+                else:
+                    movement_time = 0.2  # Default for first move
+                
                 time.sleep(movement_time)
+                self.last_coords = coords[:3]  # Store for next calculation
                 return True
                 
         except Exception as e:

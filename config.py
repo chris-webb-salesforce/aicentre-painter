@@ -10,7 +10,7 @@ import cv2
 # These values are for table surface drawing
 ORIGIN_X = 200.0  # X position on table
 ORIGIN_Y = 0.0    # Y position on table  
-ORIGIN_Z = 100.0  # Height above table (adjust based on your table height)
+ORIGIN_Z = 10.0  # Height above table (adjust based on your table height)
 
 # Drawing area dimensions
 DRAWING_AREA_WIDTH_MM = 120
@@ -25,7 +25,7 @@ PEN_RETRACT_Z = ORIGIN_Z + 25    # Safe height above paper (reduced for faster m
 # --- Safety Settings ---
 # Critical safety parameters to prevent damage
 SAFE_TRAVEL_HEIGHT = ORIGIN_Z + 50  # Safe height for all position changes (50mm above table)
-MIN_SAFE_Z = ORIGIN_Z - 10          # Absolute minimum Z (10mm below table surface)
+MIN_SAFE_Z = ORIGIN_Z - 30          # Absolute minimum Z (10mm below table surface)
 MAX_SAFE_Z = ORIGIN_Z + 200         # Maximum safe Z height
 SAFETY_MARGIN = 5                   # Additional safety margin (mm)
 
@@ -133,10 +133,10 @@ CAMERA_INDEX = 0
 DRAWING_ORIENTATION = [180, 0, 45]
 
 # --- Movement Synchronization Settings ---
-USE_MOVEMENT_SYNC = True  # Enable proper movement waiting
+USE_MOVEMENT_SYNC = False  # Disable movement sync to reduce jumpiness (use time-based delays)
 MAX_WAIT_TIME = 3.0  # Maximum time to wait for movement completion
 POSITION_TOLERANCE = 3.0  # mm tolerance for position checking (looser for speed)
-POSITION_CHECK_INTERVAL = 0.02  # Check position every 20ms
+POSITION_CHECK_INTERVAL = 0.05  # Check position every 50ms (slower polling to reduce jitter)
 
 # Desired J6 angle for pen holder
 DESIRED_J6_ANGLE = 45
