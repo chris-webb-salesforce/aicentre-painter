@@ -131,8 +131,9 @@ class HorizontalTableDrawingRobot:
         
         # Movement synchronization settings
         self.use_movement_sync = True  # Enable proper movement waiting
-        self.max_wait_time = 10.0  # Maximum time to wait for movement completion
-        self.position_tolerance = 1.0  # mm tolerance for position checking
+        self.max_wait_time = 3.0  # Maximum time to wait for movement completion
+        self.position_tolerance = 2.0  # mm tolerance for position checking (looser for speed)
+        self.position_check_interval = 0.02  # Check position every 20ms
     
     def check_force_feedback(self):
         """Monitor force feedback and adjust Z if needed."""
@@ -179,6 +180,7 @@ class HorizontalTableDrawingRobot:
             timeout = self.max_wait_time
         
         start_time = time.time()
+        consecutive_failures = 0
         
         while time.time() - start_time < timeout:
             try:
@@ -190,15 +192,23 @@ class HorizontalTableDrawingRobot:
                     if distance <= self.position_tolerance:
                         return True
                     
-                    # Small delay before next check
-                    time.sleep(0.05)
+                    consecutive_failures = 0  # Reset failure counter
+                    time.sleep(self.position_check_interval)  # Fast checking
                 else:
-                    # Fallback if get_coords fails
-                    time.sleep(0.1)
+                    consecutive_failures += 1
+                    if consecutive_failures > 5:  # If get_coords fails repeatedly, give up early
+                        print("⚠️  Position checking failed - using fallback timing")
+                        time.sleep(0.1)  # Short fallback
+                        return True
+                    time.sleep(0.02)
                     
-            except Exception as e:
-                # If position checking fails, use fallback timing
-                time.sleep(0.1)
+            except Exception:
+                consecutive_failures += 1
+                if consecutive_failures > 5:
+                    print("⚠️  Position checking error - using fallback timing") 
+                    time.sleep(0.1)  # Short fallback
+                    return True
+                time.sleep(0.02)
                 
         print(f"⚠️  Movement timeout after {timeout}s - continuing anyway")
         return False
@@ -209,14 +219,18 @@ class HorizontalTableDrawingRobot:
             self.mc.send_coords(coords, speed, mode)
             
             if wait_for_completion and self.use_movement_sync:
+                # For drawing movements, use shorter timeout 
+                if speed >= DRAWING_SPEED:  # Drawing or faster movements
+                    timeout = min(1.5, self.max_wait_time)  # Max 1.5 seconds for drawing
+                else:
+                    timeout = self.max_wait_time  # Full timeout for positioning moves
+                
                 # Wait for movement to complete
-                success = self.wait_for_movement_completion(coords[:3])  # Only check X,Y,Z
-                if not success:
-                    print(f"Movement may not have completed: {coords[:3]}")
+                success = self.wait_for_movement_completion(coords[:3], timeout)
                 return success
             else:
-                # Use fallback timing if sync is disabled
-                movement_time = max(0.1, speed / 100.0)  # Estimate based on speed
+                # Use smart fallback timing if sync is disabled
+                movement_time = max(0.05, min(0.5, speed / 200.0))  # Faster estimates
                 time.sleep(movement_time)
                 return True
                 
@@ -231,11 +245,11 @@ class HorizontalTableDrawingRobot:
             
             if wait_for_completion and self.use_movement_sync:
                 # For angle movements, use time-based waiting since position checking is harder
-                movement_time = max(2.0, speed / 20.0)  # Conservative estimate
+                movement_time = max(1.0, min(3.0, speed / 30.0))  # Faster, capped estimates
                 time.sleep(movement_time)
                 return True
             else:
-                time.sleep(max(1.0, speed / 30.0))
+                time.sleep(max(0.5, min(2.0, speed / 40.0)))  # Faster fallback
                 return True
                 
         except Exception as e:
@@ -717,7 +731,7 @@ class HorizontalTableDrawingRobot:
                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
         cv2.putText(preview_img, "• Arrows = travel paths", (10, legend_y + 65), 
                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
-        cv2.putText(preview_img, "Press 'd' to draw, 's' to save, any key to cancel", (10, legend_y + 90), 
+        cv2.putText(preview_img, "Press 'd' to draw, 's' to save, 'g' for G-code, any key to cancel", (10, legend_y + 90), 
                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 100, 0), 1)
         
         return preview_img
@@ -1070,6 +1084,139 @@ class HorizontalTableDrawingRobot:
             print(f"❌ Failed to export CSV: {e}")
             return None
 
+    def export_gcode(self, contours, filename=None):
+        """Export contours as G-code (.nc) file compatible with MyCobot workflow."""
+        if not filename:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"drawing_{timestamp}.nc"
+        
+        try:
+            with open(filename, 'w') as f:
+                # Write G-code header
+                f.write("G90\n")  # Absolute positioning
+                f.write("G4 S1\n")  # Pause 1 second
+                
+                # Initial positioning - move to safe height
+                f.write(f"G01 X{ORIGIN_X:.2f} Y{ORIGIN_Y:.2f} Z{PEN_RETRACT_Z:.2f} F15\n")
+                f.write("G4 S1\n")  # Pause
+                
+                for contour_idx, contour_points in enumerate(contours):
+                    if len(contour_points) < 2:
+                        continue
+                    
+                    # Move to start position (pen up)
+                    start_x, start_y = contour_points[0]
+                    f.write(f"G0 X{start_x:.2f} Y{start_y:.2f}\n")
+                    
+                    # Lower pen to drawing height
+                    f.write(f"G0 Z{PEN_DRAWING_Z:.2f}\n")
+                    
+                    # Draw contour segments
+                    for point_idx in range(1, len(contour_points)):
+                        x, y = contour_points[point_idx]
+                        f.write(f"G1 X{x:.2f} Y{y:.2f}\n")
+                    
+                    # Lift pen after contour
+                    f.write(f"G0 Z{PEN_RETRACT_Z:.2f}\n")
+                
+                # Final position and end
+                f.write(f"G0 X{ORIGIN_X:.2f} Y{ORIGIN_Y:.2f}\n")
+                f.write("M21 P0\n")  # Program end
+            
+            print(f"✅ G-code exported to {filename}")
+            print(f"   Total contours: {len(contours)}")
+            return filename
+            
+        except Exception as e:
+            print(f"❌ Failed to export G-code: {e}")
+            return None
+
+    def process_gcode(self, file_path):
+        """
+        Parse the contents of the gcode file, extract the XYZ coordinate values, and save the coordinate data into a list
+        :param file_path: Gcode file path
+        :return: A coordinate list with robot orientation
+        """
+        # The last valid coordinate, using the current coordinates as starting attitude
+        current_coords = self.mc.get_coords()
+        if current_coords:
+            last_coords = [0.0, 0.0, 0.0, current_coords[3], current_coords[4], current_coords[5]]
+        else:
+            last_coords = [0.0, 0.0, 0.0] + self.DRAWING_ORIENTATION
+        
+        data_coords = []
+        
+        try:
+            with open(file_path, 'r') as file:
+                # Line-by-line processing instructions
+                for line in file:
+                    command = line.strip()  # Remove newline characters and other whitespace characters at the end of the line
+                    if command.startswith("G0") or command.startswith("G1"):  # Move command
+                        coords = last_coords[:]  # Copy the previous valid coordinates
+                        command_parts = command.split()
+                        for part in command_parts[1:]:
+                            if part.startswith("X") or part.startswith("x"):
+                                coords[0] = float(part[1:])  # Extract and transform X coordinate data
+                            elif part.startswith("Y") or part.startswith("y"):
+                                coords[1] = float(part[1:])  # Extract and transform Y coordinate data
+                            elif part.startswith("Z") or part.startswith("z"):
+                                coords[2] = float(part[1:])  # Extract and transform Z coordinate data
+                        
+                        # If XY data is missing, use the last valid XY coordinates
+                        if coords[0] == 0.0 and coords[1] == 0.0:
+                            coords[0] = last_coords[0]
+                            coords[1] = last_coords[1]
+                        if coords[2] == 0.0:  # If Z data is missing, use the last valid Z coordinate
+                            coords[2] = last_coords[2]
+                        
+                        last_coords = coords
+                        data_coords.append(coords)  # Add coordinates to list and save
+        except Exception as e:
+            print(f"❌ Failed to parse G-code file: {e}")
+            return []
+        
+        return data_coords
+
+    def execute_gcode_drawing(self, file_path, draw_speed=100):
+        """
+        Execute drawing from a G-code file using MyCobot 320.
+        :param file_path: Path to the G-code (.nc) file
+        :param draw_speed: Drawing speed (0-100)
+        """
+        print(f"Processing G-code file: {file_path}")
+        
+        # Parse G-code file to get coordinate data
+        coords_data = self.process_gcode(file_path)
+        
+        if not coords_data:
+            print("❌ No valid coordinates found in G-code file")
+            return False
+        
+        print(f"✅ Loaded {len(coords_data)} coordinate points")
+        
+        # Move to home position first
+        self.go_to_home_position()
+        
+        # Execute each coordinate command
+        print("Starting G-code execution...")
+        for i, coords in enumerate(coords_data):
+            try:
+                # Send coordinates to the robot arm with proper orientation
+                self.synchronized_move(coords, draw_speed, 1)  # Use mode 1 for G-code execution
+                
+                # Progress update every 10 moves
+                if i % 10 == 0:
+                    progress = (i + 1) / len(coords_data) * 100
+                    print(f"Progress: {progress:.1f}% ({i+1}/{len(coords_data)})")
+                
+            except Exception as e:
+                print(f"❌ Error executing coordinate {i+1}: {e}")
+                continue
+        
+        print("✅ G-code execution completed!")
+        self.go_to_home_position()
+        return True
+
     def create_pybullet_simulation_script(self, trajectory_file, script_name=None):
         """Create a basic PyBullet simulation script template."""
         if not script_name:
@@ -1282,7 +1429,8 @@ if __name__ == "__main__":
         print("\nPreview Controls:")
         print("  'd' = Start drawing")
         print("  's' = Save preview image")
-        print("  'e' = Export trajectory for PyBullet simulation") 
+        print("  'e' = Export trajectory for PyBullet simulation")
+        print("  'g' = Export G-code (.nc) file for MyCobot execution")
         print("  Any other key = Cancel drawing")
         
         key = cv2.waitKey(0)
@@ -1297,7 +1445,24 @@ if __name__ == "__main__":
             cv2.destroyAllWindows()
         elif key == ord('e'):
             self._handle_trajectory_export(contours)
-            print("Press 'd' to draw or any other key to cancel:")
+            print("Press 'd' to draw, 'g' to export G-code, or any other key to cancel:")
+            key = cv2.waitKey(0)
+            cv2.destroyAllWindows()
+        elif key == ord('g'):
+            # Export G-code
+            gcode_file = self.export_gcode(contours)
+            if gcode_file:
+                print(f"G-code exported to {gcode_file}")
+                execute_now = input("Execute G-code drawing now? (y/n): ").lower().strip()
+                if execute_now == 'y':
+                    speed = input("Enter drawing speed (1-100, default 50): ").strip()
+                    try:
+                        draw_speed = int(speed) if speed else 50
+                        draw_speed = max(1, min(100, draw_speed))  # Clamp to valid range
+                    except ValueError:
+                        draw_speed = 50
+                    self.execute_gcode_drawing(gcode_file, draw_speed)
+            print("Press 'd' to draw directly or any other key to cancel:")
             key = cv2.waitKey(0)
             cv2.destroyAllWindows()
         
@@ -1381,9 +1546,32 @@ if __name__ == "__main__":
             self.test_drawing_area()
         
         while True:
-            action = input("\\nPress ENTER to start drawing (or 'exit' to quit): ").lower().strip()
-            if action == 'exit':
+            print("\n--- MAIN MENU ---")
+            print("1. Create new drawing from image")
+            print("2. Execute existing G-code file")
+            print("3. Exit")
+            
+            action = input("Select option (1-3): ").strip()
+            
+            if action == '3' or action.lower() == 'exit':
                 break
+            elif action == '2':
+                # Execute existing G-code file
+                gcode_file = input("Enter G-code file path: ").strip()
+                if os.path.exists(gcode_file):
+                    speed = input("Enter drawing speed (1-100, default 50): ").strip()
+                    try:
+                        draw_speed = int(speed) if speed else 50
+                        draw_speed = max(1, min(100, draw_speed))
+                    except ValueError:
+                        draw_speed = 50
+                    self.execute_gcode_drawing(gcode_file, draw_speed)
+                else:
+                    print(f"File not found: {gcode_file}")
+                continue
+            elif action != '1':
+                print("Invalid option. Please select 1, 2, or 3.")
+                continue
             
             # Photo capture
             # Skip for now
