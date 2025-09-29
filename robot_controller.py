@@ -176,51 +176,16 @@ class RobotController:
         return z
 
     def safe_move_to_position(self, x, y, target_z=None, speed=TRAVEL_SPEED):
-        """
-        Safely move to a position by always traveling at safe height first.
-        This prevents the robot from going below table level during position changes.
-        """
+        """Move directly to position with Z validation."""
         if target_z is None:
             target_z = SAFE_TRAVEL_HEIGHT
         
         # Validate target Z coordinate
         target_z = self.validate_z_coordinate(target_z)
         
-        # Step 1: Always lift to safe travel height first (if not already there)
-        current_pos = self.mc.get_coords()
-        if current_pos and current_pos[2] < SAFE_TRAVEL_HEIGHT - 5:  # 5mm tolerance
-            print(f"Lifting to safe travel height ({SAFE_TRAVEL_HEIGHT:.1f}mm)")
-            safe_coords = [current_pos[0], current_pos[1], SAFE_TRAVEL_HEIGHT] + DRAWING_ORIENTATION
-            compensated_coords = self.apply_z_compensation(safe_coords)
-            self.mc.send_coords(compensated_coords, LIFT_SPEED, 0)
-            
-            if self.use_movement_sync:
-                self.wait_for_movement_completion(compensated_coords[:3], timeout=2.0)
-            else:
-                time.sleep(1.0)
-        
-        # Step 2: Move to target X,Y at safe height
-        travel_coords = [x, y, SAFE_TRAVEL_HEIGHT] + DRAWING_ORIENTATION
-        compensated_coords = self.apply_z_compensation(travel_coords)
-        self.mc.send_coords(compensated_coords, speed, 0)
-        
-        if self.use_movement_sync:
-            self.wait_for_movement_completion(compensated_coords[:3])
-        else:
-            time.sleep(0.5)
-        
-        # Step 3: Move to final Z position if different from safe height
-        if abs(target_z - SAFE_TRAVEL_HEIGHT) > 1.0:  # Only if significantly different
-            final_coords = [x, y, target_z] + DRAWING_ORIENTATION
-            compensated_coords = self.apply_z_compensation(final_coords)
-            self.mc.send_coords(compensated_coords, APPROACH_SPEED, 0)
-            
-            if self.use_movement_sync:
-                self.wait_for_movement_completion(compensated_coords[:3])
-            else:
-                time.sleep(0.3)
-        
-        return True
+        # Direct move to target position
+        coords = [x, y, target_z] + DRAWING_ORIENTATION
+        return self.synchronized_move(coords, speed, TRAVEL_MOVEMENT_MODE)
 
     def check_force_feedback(self):
         """Monitor force feedback and adjust Z if needed."""
@@ -449,8 +414,7 @@ class RobotController:
         base_retract_z = PEN_RETRACT_Z
         base_drawing_z = PEN_DRAWING_Z
         
-        # SAFETY: Use safe movement to get to position
-        print(f"Moving safely to position ({x:.1f}, {y:.1f})")
+        # Move to position
         target_coords = [x, y, base_retract_z] + DRAWING_ORIENTATION
         # Use appropriate movement mode for travel
         self.synchronized_move(target_coords, TRAVEL_SPEED, TRAVEL_MOVEMENT_MODE)
@@ -479,7 +443,7 @@ class RobotController:
         current = self.mc.get_coords()
         if current:
             # SAFETY: Always lift to safe retract height
-            print(f"Lifting pen safely from ({current[0]:.1f}, {current[1]:.1f})")
+            print(f"Lifting pen from ({current[0]:.1f}, {current[1]:.1f})")
             
             # Gradual lift in steps to prevent jerky movement
             lift_steps = 2
@@ -528,7 +492,7 @@ class RobotController:
         """Move to drawing start position."""
         print("Moving to drawing start position...")
         self.gentle_pen_up()
-        # SAFETY: Use safe movement to home position
+        # Move to home position
         self.safe_move_to_position(ORIGIN_X, ORIGIN_Y, PEN_RETRACT_Z, 40)
     
     def go_to_photo_position(self):
@@ -647,10 +611,10 @@ class RobotController:
         ]
         
         for i, (x, y) in enumerate(test_positions):
-            print(f"  Moving safely to position {i+1}: ({x:.1f}, {y:.1f})")
+            print(f"  Moving to position {i+1}: ({x:.1f}, {y:.1f})")
             try:
                 self.safe_move_to_position(x, y)
-                print(f"  ✅ Position {i+1} completed safely")
+                print(f"  ✅ Position {i+1} completed")
                 time.sleep(0.5)
             except Exception as e:
                 print(f"  ❌ Position {i+1} failed: {e}")
