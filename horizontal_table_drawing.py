@@ -23,15 +23,15 @@ PEN_DRAWING_Z = ORIGIN_Z - 3   # Drawing pressure (lower = more pressure)
 PEN_RETRACT_Z = ORIGIN_Z + 30  # Safe height above paper
 
 # --- Movement Control Settings ---
-# Speed settings for different operations
-APPROACH_SPEED = 15  # Slower speed when approaching paper
-DRAWING_SPEED = 20  # Slower speed while drawing for better quality
-LIFT_SPEED = 30  # Speed when lifting pen
-TRAVEL_SPEED = 40  # Speed for non-drawing movements
+# Speed settings for different operations (OPTIMIZED)
+APPROACH_SPEED = 30  # Faster approach while still gentle
+DRAWING_SPEED = 50  # Much faster drawing speed
+LIFT_SPEED = 60  # Faster pen lifting
+TRAVEL_SPEED = 80  # Faster travel movements
 
-# Movement interpolation settings
-INTERPOLATION_POINTS = 5  # More intermediate points for smoother curves
-MIN_SEGMENT_LENGTH = 1.5  # Smaller segments for better detail
+# Movement interpolation settings (OPTIMIZED)
+INTERPOLATION_POINTS = 2  # Reduced interpolation points
+MIN_SEGMENT_LENGTH = 5.0  # Larger segments for faster drawing
 
 # --- Force Protection Settings ---
 MAX_DRAWING_FORCE = 5  # Maximum force to apply (robot units)
@@ -45,11 +45,23 @@ BAUD_RATE = 115200
 IMAGE_WIDTH_PX = 400
 IMAGE_HEIGHT_PX = 600
 
-# --- Drawing Optimization ---
-CONTOUR_SIMPLIFICATION_FACTOR = 0.008  # Slightly higher for smoother lines
-REST_INTERVAL = 30  # Rest every N contours
-REST_DURATION_S = 1
+# --- Drawing Optimization (PERFORMANCE OPTIMIZED) ---
+# OLD VALUES (comment/uncomment to switch):
+# CONTOUR_SIMPLIFICATION_FACTOR = 0.02  # Higher simplification for fewer points
+# MIN_CONTOUR_AREA = 10  # Skip very small contours
+
+# MEDIUM SIMPLIFICATION (faster drawing, decent quality):
+CONTOUR_SIMPLIFICATION_FACTOR = 0.05  # More aggressive - fewer points
+MIN_CONTOUR_AREA = 25  # Skip more small details
+
+# FOR EVEN FASTER (uncomment these instead):
+# CONTOUR_SIMPLIFICATION_FACTOR = 0.1  # Very aggressive
+# MIN_CONTOUR_AREA = 50  # Skip most small details
+
+REST_INTERVAL = 0  # Disable rest intervals for continuous drawing
+REST_DURATION_S = 0
 OPTIMIZE_DRAWING_PATH = True
+BATCH_SIZE = 10  # Process contours in batches
 
 # --- File Paths ---
 CAPTURED_IMAGE_PATH = "captured_face.jpg"
@@ -179,20 +191,13 @@ class HorizontalTableDrawingRobot:
         if self.pen_is_down:
             return
             
-        # First move to position above the paper
+        # OPTIMIZED: Faster pen down with minimal delays
         self.mc.send_coords([x, y, PEN_RETRACT_Z] + self.DRAWING_ORIENTATION, TRAVEL_SPEED, 0)
-        time.sleep(0.8)  # Longer delay for position settling
-        # J6 angle controlled by Cartesian RZ=45
+        time.sleep(0.2)  # Reduced delay
         
-        # Approach slowly to contact position
-        self.smooth_approach([x, y, PEN_CONTACT_Z] + self.DRAWING_ORIENTATION, APPROACH_SPEED)
-        time.sleep(0.3)
-        # Pen angle maintained by Cartesian coordinates
-        
-        # Apply gentle drawing pressure
-        self.mc.send_coords([x, y, PEN_DRAWING_Z] + self.DRAWING_ORIENTATION, APPROACH_SPEED // 2, 0)
-        time.sleep(0.4)  # Longer delay for pressure settling
-        # J6 angle controlled by Cartesian RZ=45
+        # Direct approach to drawing position
+        self.mc.send_coords([x, y, PEN_DRAWING_Z] + self.DRAWING_ORIENTATION, APPROACH_SPEED, 0)
+        time.sleep(0.15)  # Minimal settling time
         
         self.pen_is_down = True
         self.current_position = [x, y]
@@ -204,15 +209,9 @@ class HorizontalTableDrawingRobot:
             
         current = self.mc.get_coords()
         if current:
-            # First reduce pressure
-            self.mc.send_coords([current[0], current[1], PEN_CONTACT_Z] + self.DRAWING_ORIENTATION, LIFT_SPEED, 0)
-            time.sleep(0.2)
-            # Pen angle maintained automatically
-            
-            # Then retract
+            # OPTIMIZED: Direct pen lift without intermediate steps
             self.mc.send_coords([current[0], current[1], PEN_RETRACT_Z] + self.DRAWING_ORIENTATION, LIFT_SPEED, 0)
-            time.sleep(0.5)
-            # Pen angle maintained automatically
+            time.sleep(0.1)  # Minimal delay
         
         self.pen_is_down = False
     
@@ -223,20 +222,19 @@ class HorizontalTableDrawingRobot:
         
         distance = np.sqrt((x2 - x1)**2 + (y2 - y1)**2)
         
+        # OPTIMIZED: Simplified line drawing with minimal delays
         if distance < MIN_SEGMENT_LENGTH:
-            # Direct movement for short segments
             self.mc.send_coords([x2, y2, PEN_DRAWING_Z] + self.DRAWING_ORIENTATION, DRAWING_SPEED, 0)
-            time.sleep(0.1)  # Increased delay
-            # Pen angle maintained automatically  # Maintain pen angle
+            time.sleep(0.02)  # Much shorter delay
         else:
-            # Interpolate for smooth curves
-            num_points = max(2, int(distance / MIN_SEGMENT_LENGTH))
+            # Reduced interpolation for speed
+            num_points = max(2, min(3, int(distance / MIN_SEGMENT_LENGTH)))  # Cap max points
             for i in range(1, num_points + 1):
                 ratio = i / num_points
                 x = x1 + (x2 - x1) * ratio
                 y = y1 + (y2 - y1) * ratio
                 self.mc.send_coords([x, y, PEN_DRAWING_Z] + self.DRAWING_ORIENTATION, DRAWING_SPEED, 0)
-                time.sleep(0.08)  # Increased delay for smoother drawing
+                time.sleep(0.02)  # Much shorter delay
         
         self.current_position = [x2, y2]
     
@@ -368,9 +366,10 @@ class HorizontalTableDrawingRobot:
         inverted_blurred_image = 255 - blurred_image
         pencil_sketch = cv2.divide(gray_image, inverted_blurred_image, scale=256.0)
         
-        final_sketch = cv2.adaptiveThreshold(pencil_sketch, 255,
-                                             cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-                                             cv2.THRESH_BINARY_INV, 11, 2)
+        # Sketch detail level (comment/uncomment to switch):
+        # final_sketch = cv2.adaptiveThreshold(pencil_sketch, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 11, 2)  # DETAILED
+        final_sketch = cv2.adaptiveThreshold(pencil_sketch, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 15, 4)  # MEDIUM
+        # final_sketch = cv2.adaptiveThreshold(pencil_sketch, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 21, 6)  # SIMPLE
         
         cv2.imwrite(SKETCH_IMAGE_PATH, final_sketch)
         print(f"Sketch created and saved to {SKETCH_IMAGE_PATH}")
@@ -429,95 +428,111 @@ class HorizontalTableDrawingRobot:
         
         return ordered
     
+    def preprocess_contours(self, sketch_image):
+        """OPTIMIZED: Preprocess and filter contours for faster drawing."""
+        contours, _ = cv2.findContours(sketch_image, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+        
+        # Pre-filter and convert all contours at once
+        valid_contours = []
+        for contour in contours:
+            try:
+                area = cv2.contourArea(contour)
+                if area < MIN_CONTOUR_AREA:  # Skip very small contours
+                    continue
+                    
+                # Aggressive simplification for speed
+                epsilon = CONTOUR_SIMPLIFICATION_FACTOR * cv2.arcLength(contour, True)
+                approx = cv2.approxPolyDP(contour, epsilon, True)
+                
+                if len(approx) >= 2:  # Need at least 2 points
+                    # Pre-convert to mm coordinates
+                    mm_points = []
+                    for point in approx:
+                        px_x, px_y = point[0]
+                        mm_x = ORIGIN_X + (px_x / IMAGE_WIDTH_PX) * DRAWING_AREA_WIDTH_MM
+                        mm_y = ORIGIN_Y + DRAWING_AREA_HEIGHT_MM - (px_y / IMAGE_HEIGHT_PX) * DRAWING_AREA_HEIGHT_MM
+                        mm_points.append((mm_x, mm_y))
+                    valid_contours.append((area, mm_points))
+            except:
+                continue
+        
+        # Sort by area (largest first) and extract points
+        valid_contours.sort(key=lambda x: x[0], reverse=True)
+        return [points for _, points in valid_contours]
+
     def draw_sketch(self, sketch_image):
-        """Draw the sketch with optimized vertical drawing."""
+        """OPTIMIZED: Draw the sketch with performance improvements."""
         if sketch_image is None:
             print("Cannot draw, sketch image is missing.")
             return
         
-        # Find and simplify contours
-        contours, _ = cv2.findContours(sketch_image, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
-        
-        simplified_contours = []
-        for contour in contours:
-            # Skip if contour is too small or invalid
-            try:
-                area = cv2.contourArea(contour)
-                if area < 2:
-                    continue
-            except:
-                continue
-            
-            epsilon = CONTOUR_SIMPLIFICATION_FACTOR * cv2.arcLength(contour, True)
-            approx = cv2.approxPolyDP(contour, epsilon, True)
-            simplified_contours.append(approx)
-        
-        # Sort by area and optimize path
-        contours = sorted(simplified_contours, key=cv2.contourArea, reverse=True)
+        # Preprocess all contours at once
+        print("Preprocessing contours...")
+        contours = self.preprocess_contours(sketch_image)
         
         if OPTIMIZE_DRAWING_PATH:
-            contours = self.optimize_contour_path(contours)
+            print("Optimizing path...")
+            # Simple nearest-neighbor optimization for pre-converted points
+            if contours:
+                optimized = [contours[0]]
+                remaining = contours[1:]
+                current_end = contours[0][-1] if contours[0] else (0, 0)
+                
+                while remaining:
+                    closest_idx = 0
+                    min_dist = float('inf')
+                    for i, contour in enumerate(remaining):
+                        if contour:
+                            dist = ((current_end[0] - contour[0][0])**2 + (current_end[1] - contour[0][1])**2)**0.5
+                            if dist < min_dist:
+                                min_dist = dist
+                                closest_idx = i
+                    
+                    closest = remaining.pop(closest_idx)
+                    optimized.append(closest)
+                    current_end = closest[-1] if closest else current_end
+                contours = optimized
         
-        print(f"Found {len(contours)} contours to draw.")
-        print("="*60)  # Separator line
+        print(f"Drawing {len(contours)} optimized contours...")
+        print("="*60)
         
-        # Move to safe starting position
+        # Setup
         self.go_to_home_position()
-        initial_coords = [ORIGIN_X, ORIGIN_Y, PEN_RETRACT_Z] + self.DRAWING_ORIENTATION
-        self.mc.send_coords(initial_coords, TRAVEL_SPEED, 0)
-        time.sleep(3)
+        time.sleep(1)  # Reduced setup time
         
-        total_contours = len(contours)
-        contours_drawn = 0
         start_time = time.time()
         
-        for i, contour in enumerate(contours):
-            if len(contour) < 2:
+        # OPTIMIZED: Draw all contours with minimal overhead
+        for i, contour_points in enumerate(contours):
+            if len(contour_points) < 2:
                 continue
             
-            # Rest interval
-            if REST_INTERVAL > 0 and contours_drawn > 0 and contours_drawn % REST_INTERVAL == 0:
-                print()  # New line before rest message
-                print(f"\\n💤 Resting for {REST_DURATION_S} seconds...")
-                self.gentle_pen_up()
-                self.go_to_home_position()
-                time.sleep(REST_DURATION_S)
-                self.mc.send_coords(initial_coords, TRAVEL_SPEED, 0)
-                time.sleep(2)
-                print()  # Resume drawing message
+            # Progress update every 50 contours instead of every contour
+            if i % 50 == 0:
+                self.print_progress_bar(i+1, len(contours), prefix="Drawing")
             
-            # Update progress bar
-            self.print_progress_bar(i+1, total_contours, prefix="Drawing")
+            # Start drawing this contour
+            start_x, start_y = contour_points[0]
+            self.gentle_pen_down(start_x, start_y)
             
-            # Convert first point to mm (maintain top-to-bottom, left-to-right tracing)
-            start_point_px = contour[0][0]
-            start_x_mm = ORIGIN_X + (start_point_px[0] / IMAGE_WIDTH_PX) * DRAWING_AREA_WIDTH_MM
-            start_y_mm = ORIGIN_Y + DRAWING_AREA_HEIGHT_MM - (start_point_px[1] / IMAGE_HEIGHT_PX) * DRAWING_AREA_HEIGHT_MM
-            
-            # Move to start position and lower pen
-            self.gentle_pen_down(start_x_mm, start_y_mm)
-            
-            # Draw the contour with smooth segments
-            prev_point = (start_x_mm, start_y_mm)
-            for j in range(1, len(contour)):
-                point_px = contour[j][0]
-                x_mm = ORIGIN_X + (point_px[0] / IMAGE_WIDTH_PX) * DRAWING_AREA_WIDTH_MM
-                y_mm = ORIGIN_Y + DRAWING_AREA_HEIGHT_MM - (point_px[1] / IMAGE_HEIGHT_PX) * DRAWING_AREA_HEIGHT_MM
-                
-                self.draw_line_segment(prev_point, (x_mm, y_mm))
-                prev_point = (x_mm, y_mm)
+            # Draw all segments in this contour
+            for j in range(1, len(contour_points)):
+                next_x, next_y = contour_points[j]
+                # Direct movement without interpolation for most segments
+                self.mc.send_coords([next_x, next_y, PEN_DRAWING_Z] + self.DRAWING_ORIENTATION, DRAWING_SPEED, 0)
+                time.sleep(0.01)  # Minimal delay
             
             # Lift pen for next contour
             self.gentle_pen_up()
-            contours_drawn += 1
         
-        # Final progress bar update and completion message
-        print()  # New line after progress bar
+        # Final progress and timing
         elapsed_time = time.time() - start_time
+        print()
         print("="*60)
-        print(f"\\n✓ Drawing complete!")
-        print(f"  Total contours drawn: {contours_drawn}")
+        print(f"✓ OPTIMIZED Drawing complete!")
+        print(f"  Contours drawn: {len(contours)}")
         print(f"  Time elapsed: {elapsed_time//60:.0f}m {elapsed_time%60:.0f}s")
+        print(f"  Average: {elapsed_time/len(contours):.3f}s per contour")
         print("="*60)
         self.go_to_home_position()
     
