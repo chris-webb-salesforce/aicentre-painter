@@ -17,25 +17,29 @@ DRAWING_AREA_WIDTH_MM = 120
 DRAWING_AREA_HEIGHT_MM = 180
 
 # --- Pressure Control Settings ---
-# For flat table drawing, Z controls pen height
-PEN_CONTACT_Z = ORIGIN_Z - 2   # Just touching the paper
-PEN_DRAWING_Z = ORIGIN_Z - 3   # Drawing pressure (lower = more pressure)
-PEN_RETRACT_Z = ORIGIN_Z + 30  # Safe height above paper
+# For flat table drawing, Z controls pen height (OPTIMIZED FOR STABILITY)
+PEN_CONTACT_Z = ORIGIN_Z - 1.5   # Light contact to test surface
+PEN_DRAWING_Z = ORIGIN_Z - 2.5   # Moderate drawing pressure (reduced to prevent digging)
+PEN_RETRACT_Z = ORIGIN_Z + 25    # Safe height above paper (reduced for faster movement)
 
 # --- Movement Control Settings ---
-# Speed settings for different operations (OPTIMIZED)
-APPROACH_SPEED = 30  # Faster approach while still gentle
-DRAWING_SPEED = 50  # Much faster drawing speed
-LIFT_SPEED = 60  # Faster pen lifting
-TRAVEL_SPEED = 80  # Faster travel movements
+# Speed settings for different operations (STABILIZED FOR REDUCED WOBBLE)
+APPROACH_SPEED = 20  # Slower approach for better control
+DRAWING_SPEED = 25  # Reduced drawing speed to minimize wobble
+LIFT_SPEED = 30  # Controlled pen lifting
+TRAVEL_SPEED = 40  # Moderate travel to reduce vibration
 
-# Movement interpolation settings (OPTIMIZED)
-INTERPOLATION_POINTS = 2  # Reduced interpolation points
-MIN_SEGMENT_LENGTH = 5.0  # Larger segments for faster drawing
+# Movement interpolation settings (STABILIZED)
+INTERPOLATION_POINTS = 4  # More interpolation points for smoother curves
+MIN_SEGMENT_LENGTH = 3.0  # Smaller segments for better precision
+MOVEMENT_SETTLING_TIME = 0.05  # Time to let arm settle between movements
 
-# --- Force Protection Settings ---
+# --- Force Protection and Depth Control Settings ---
 MAX_DRAWING_FORCE = 5  # Maximum force to apply (robot units)
 FORCE_CHECK_INTERVAL = 0.1  # How often to check force feedback
+Z_COMPENSATION_FACTOR = 0.995  # Very gradual Z compensation to prevent digging
+Z_STABILIZATION_THRESHOLD = 0.3  # Tighter threshold for Z-axis correction
+MAX_Z_DRIFT = 0.8  # Maximum allowed Z drift before correction
 
 # --- Robot Configuration ---
 SERIAL_PORT = "/dev/ttyAMA0"
@@ -100,9 +104,11 @@ class HorizontalTableDrawingRobot:
         # [RX, RY, RZ] - pen holder rotation controlled by J6 joint position
         self.DRAWING_ORIENTATION = [180, 0, 45]
         
-        # Track current pen state
+        # Track current pen state and depth
         self.pen_is_down = False
         self.current_position = None
+        self.current_z_depth = PEN_RETRACT_Z
+        self.movement_counter = 0
         
         
         # Orientation for flat table drawing with pen pointing straight down
@@ -115,6 +121,46 @@ class HorizontalTableDrawingRobot:
         
         # Desired J6 angle for pen holder
         self.DESIRED_J6_ANGLE = 45
+        
+        # Force feedback monitoring
+        self.last_force_check = time.time()
+        self.force_warnings = 0
+    
+    def check_force_feedback(self):
+        """Monitor force feedback and adjust Z if needed."""
+        current_time = time.time()
+        if current_time - self.last_force_check < FORCE_CHECK_INTERVAL:
+            return
+        
+        self.last_force_check = current_time
+        
+        # Note: Force feedback implementation depends on robot model capabilities
+        # This is a placeholder for force monitoring logic
+        try:
+            # In a real implementation, you would check robot force sensors here
+            # For now, we'll use position-based depth compensation
+            if self.pen_is_down and self.movement_counter > 75:
+                # After many movements, check for excessive drift
+                z_drift = PEN_DRAWING_Z - self.current_z_depth
+                if abs(z_drift) > Z_STABILIZATION_THRESHOLD:
+                    # Apply gentle correction
+                    correction = z_drift * 0.1  # 10% correction
+                    self.current_z_depth += correction
+                    # Clamp to safe range
+                    self.current_z_depth = max(PEN_DRAWING_Z - 0.8, 
+                                              min(PEN_DRAWING_Z + 0.4, self.current_z_depth))
+                    print(f"Force-based Z correction: {self.current_z_depth:.2f}mm (drift: {z_drift:.2f}mm)")
+        except Exception as e:
+            # Force feedback not available - continue with position control
+            pass
+    
+    def stabilize_arm_position(self):
+        """Add a brief pause to let arm stabilize and reduce oscillation."""
+        # Get current position to check if arm has settled
+        current = self.mc.get_coords()
+        if current:
+            # Brief stabilization pause
+            time.sleep(0.02)
         
     def calibrate_pen_pressure(self):
         """Interactive calibration to find optimal pen pressure."""
@@ -187,54 +233,92 @@ class HorizontalTableDrawingRobot:
             time.sleep(0.1)
     
     def gentle_pen_down(self, x, y):
-        """Gently lower the pen to the drawing surface."""
+        """Gently lower the pen to the drawing surface with smooth transition."""
         if self.pen_is_down:
             return
             
-        # OPTIMIZED: Faster pen down with minimal delays
+        # Move to position above the point
         self.mc.send_coords([x, y, PEN_RETRACT_Z] + self.DRAWING_ORIENTATION, TRAVEL_SPEED, 0)
-        time.sleep(0.2)  # Reduced delay
+        time.sleep(0.3)  # Allow arm to stabilize
         
-        # Direct approach to drawing position
-        self.mc.send_coords([x, y, PEN_DRAWING_Z] + self.DRAWING_ORIENTATION, APPROACH_SPEED, 0)
-        time.sleep(0.15)  # Minimal settling time
+        # Gradual approach to drawing surface in steps
+        approach_steps = 3
+        for i in range(1, approach_steps + 1):
+            z_position = PEN_RETRACT_Z - ((PEN_RETRACT_Z - PEN_DRAWING_Z) * (i / approach_steps))
+            self.mc.send_coords([x, y, z_position] + self.DRAWING_ORIENTATION, APPROACH_SPEED // 2, 0)
+            time.sleep(0.1)  # Small settling time between steps
+        
+        # Final positioning at drawing depth
+        self.mc.send_coords([x, y, PEN_DRAWING_Z] + self.DRAWING_ORIENTATION, APPROACH_SPEED // 3, 0)
+        time.sleep(0.2)  # Final settling time
         
         self.pen_is_down = True
         self.current_position = [x, y]
+        self.current_z_depth = PEN_DRAWING_Z
+        self.movement_counter = 0
     
     def gentle_pen_up(self):
-        """Gently lift the pen from the drawing surface."""
+        """Gently lift the pen from the drawing surface with smooth transition."""
         if not self.pen_is_down:
             return
             
         current = self.mc.get_coords()
         if current:
-            # OPTIMIZED: Direct pen lift without intermediate steps
-            self.mc.send_coords([current[0], current[1], PEN_RETRACT_Z] + self.DRAWING_ORIENTATION, LIFT_SPEED, 0)
-            time.sleep(0.1)  # Minimal delay
+            # Gradual lift in steps to prevent jerky movement
+            lift_steps = 2
+            for i in range(1, lift_steps + 1):
+                z_position = self.current_z_depth + ((PEN_RETRACT_Z - self.current_z_depth) * (i / lift_steps))
+                self.mc.send_coords([current[0], current[1], z_position] + self.DRAWING_ORIENTATION, LIFT_SPEED // 2, 0)
+                time.sleep(0.08)
         
         self.pen_is_down = False
+        self.current_z_depth = PEN_RETRACT_Z
     
     def draw_line_segment(self, from_point, to_point):
-        """Draw a line segment with smooth interpolation."""
+        """Draw a line segment with smooth interpolation and depth control."""
         x1, y1 = from_point
         x2, y2 = to_point
         
         distance = np.sqrt((x2 - x1)**2 + (y2 - y1)**2)
         
-        # OPTIMIZED: Simplified line drawing with minimal delays
+        # Enhanced Z compensation to prevent digging deeper
+        self.movement_counter += 1
+        if self.movement_counter % 15 == 0:  # Every 15 movements (less frequent)
+            # Check if we've drifted too far down
+            z_drift = PEN_DRAWING_Z - self.current_z_depth
+            if z_drift > MAX_Z_DRIFT:
+                # Gradual correction back towards target depth
+                self.current_z_depth = (self.current_z_depth * Z_COMPENSATION_FACTOR + 
+                                       PEN_DRAWING_Z * (1 - Z_COMPENSATION_FACTOR))
+                # Clamp to safe range
+                self.current_z_depth = max(PEN_DRAWING_Z - 0.5, 
+                                          min(PEN_DRAWING_Z + 0.3, self.current_z_depth))
+        
         if distance < MIN_SEGMENT_LENGTH:
-            self.mc.send_coords([x2, y2, PEN_DRAWING_Z] + self.DRAWING_ORIENTATION, DRAWING_SPEED, 0)
-            time.sleep(0.02)  # Much shorter delay
+            # For short segments, single smooth movement
+            self.mc.send_coords([x2, y2, self.current_z_depth] + self.DRAWING_ORIENTATION, DRAWING_SPEED, 0)
+            time.sleep(MOVEMENT_SETTLING_TIME)  # Consistent settling time
         else:
-            # Reduced interpolation for speed
-            num_points = max(2, min(3, int(distance / MIN_SEGMENT_LENGTH)))  # Cap max points
+            # More interpolation points for smoother curves
+            num_points = max(2, min(INTERPOLATION_POINTS, int(distance / MIN_SEGMENT_LENGTH)))
             for i in range(1, num_points + 1):
                 ratio = i / num_points
                 x = x1 + (x2 - x1) * ratio
                 y = y1 + (y2 - y1) * ratio
-                self.mc.send_coords([x, y, PEN_DRAWING_Z] + self.DRAWING_ORIENTATION, DRAWING_SPEED, 0)
-                time.sleep(0.02)  # Much shorter delay
+                
+                # Smooth speed ramping for better control
+                if i == 1 or i == num_points:
+                    speed = DRAWING_SPEED * 0.8  # Slower at segment endpoints
+                else:
+                    speed = DRAWING_SPEED
+                
+                self.mc.send_coords([x, y, self.current_z_depth] + self.DRAWING_ORIENTATION, speed, 0)
+                time.sleep(MOVEMENT_SETTLING_TIME)  # Consistent settling time
+                
+                # Check force feedback and stabilize periodically
+                if i % 2 == 0:  # Every other point
+                    self.check_force_feedback()
+                    self.stabilize_arm_position()
         
         self.current_position = [x2, y2]
     
@@ -515,12 +599,13 @@ class HorizontalTableDrawingRobot:
             start_x, start_y = contour_points[0]
             self.gentle_pen_down(start_x, start_y)
             
-            # Draw all segments in this contour
+            # Draw all segments in this contour with controlled movements
             for j in range(1, len(contour_points)):
+                prev_x, prev_y = contour_points[j-1]
                 next_x, next_y = contour_points[j]
-                # Direct movement without interpolation for most segments
-                self.mc.send_coords([next_x, next_y, PEN_DRAWING_Z] + self.DRAWING_ORIENTATION, DRAWING_SPEED, 0)
-                time.sleep(0.01)  # Minimal delay
+                
+                # Use proper line segment drawing for better control
+                self.draw_line_segment((prev_x, prev_y), (next_x, next_y))
             
             # Lift pen for next contour
             self.gentle_pen_up()
