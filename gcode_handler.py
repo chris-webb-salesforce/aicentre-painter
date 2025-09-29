@@ -93,9 +93,10 @@ class GCodeHandler:
             # Average coordinates within window
             x_sum = sum(p[0] for p in points[start_idx:end_idx])
             y_sum = sum(p[1] for p in points[start_idx:end_idx])
+            z_avg = points[i][2] if len(points[i]) > 2 else PEN_DRAWING_Z  # Preserve Z coordinate
             count = end_idx - start_idx
             
-            smoothed.append((x_sum / count, y_sum / count))
+            smoothed.append((x_sum / count, y_sum / count, z_avg))
         
         return smoothed
 
@@ -573,7 +574,7 @@ class GCodeHandler:
                         continue
                     
                     # Move to start position (pen up)
-                    start_x, start_y = points[0]
+                    start_x, start_y = points[0][0], points[0][1]  # Extract X,Y from 3D
                     f.write(f"G0 X{start_x:.{GCODE_DECIMAL_PLACES}f} Y{start_y:.{GCODE_DECIMAL_PLACES}f} Z{SAFE_TRAVEL_HEIGHT:.{GCODE_DECIMAL_PLACES}f}\n")
                     
                     # Lower pen to drawing height with controlled speed
@@ -597,7 +598,7 @@ class GCodeHandler:
                             f.write(f"F{optimal_feedrate}\n")
                             current_feedrate = optimal_feedrate
                         
-                        x, y = current_point
+                        x, y = current_point[0], current_point[1]  # Extract X,Y from 3D
                         f.write(f"G1 X{x:.{GCODE_DECIMAL_PLACES}f} Y{y:.{GCODE_DECIMAL_PLACES}f}\n")
                     
                     # Lift pen after contour
@@ -657,7 +658,7 @@ class GCodeHandler:
                     
                     
                     # Move to start position (pen up)
-                    start_x, start_y = contour_points[0]
+                    start_x, start_y = contour_points[0][0], contour_points[0][1]  # Extract X,Y from 3D
                     # Convert to relative coordinates from home position
                     rel_x = start_x - ORIGIN_X
                     rel_y = start_y - ORIGIN_Y
@@ -668,7 +669,7 @@ class GCodeHandler:
                     
                     # Draw contour segments
                     for point_idx in range(1, len(contour_points)):
-                        x, y = contour_points[point_idx]
+                        x, y = contour_points[point_idx][0], contour_points[point_idx][1]  # Extract X,Y from 3D
                         rel_x = x - ORIGIN_X
                         rel_y = y - ORIGIN_Y
                         f.write(f"G1 X{rel_x:.{GCODE_DECIMAL_PLACES}f} Y{rel_y:.{GCODE_DECIMAL_PLACES}f}\n")

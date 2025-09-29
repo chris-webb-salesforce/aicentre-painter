@@ -34,7 +34,8 @@ class WorkspaceManager:
         workspace_max_y = ORIGIN_Y + DRAWING_AREA_HEIGHT_MM + 10
         
         for i, contour_points in enumerate(contours):
-            for j, (x, y) in enumerate(contour_points):
+            for j, point in enumerate(contour_points):
+                x, y = point[0], point[1]  # Extract X,Y from 3D coordinates
                 total_points += 1
                 
                 # Track actual bounds
@@ -114,8 +115,8 @@ class WorkspaceManager:
             contour_distance = 0
             if len(contour_points) > 1:
                 for j in range(1, len(contour_points)):
-                    x1, y1 = contour_points[j-1]
-                    x2, y2 = contour_points[j]
+                    x1, y1 = contour_points[j-1][0], contour_points[j-1][1]  # Extract X,Y from 3D
+                    x2, y2 = contour_points[j][0], contour_points[j][1]      # Extract X,Y from 3D
                     seg_dist = np.sqrt((x2 - x1)**2 + (y2 - y1)**2)
                     contour_distance += seg_dist
                 
@@ -152,8 +153,8 @@ class WorkspaceManager:
         # Test a few sample points
         print("\nTesting sample trajectory points:")
         test_contours = [
-            [(ORIGIN_X + 10, ORIGIN_Y + 10), (ORIGIN_X + 30, ORIGIN_Y + 20)],  # Small line
-            [(ORIGIN_X + 50, ORIGIN_Y + 50), (ORIGIN_X + 70, ORIGIN_Y + 70)],  # Diagonal line
+            [(ORIGIN_X + 10, ORIGIN_Y + 10, PEN_DRAWING_Z), (ORIGIN_X + 30, ORIGIN_Y + 20, PEN_DRAWING_Z)],  # Small line
+            [(ORIGIN_X + 50, ORIGIN_Y + 50, PEN_DRAWING_Z), (ORIGIN_X + 70, ORIGIN_Y + 70, PEN_DRAWING_Z)],  # Diagonal line
         ]
         
         if self.validate_trajectory_points(test_contours):
