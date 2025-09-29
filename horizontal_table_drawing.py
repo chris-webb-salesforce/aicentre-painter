@@ -544,6 +544,91 @@ class HorizontalTableDrawingRobot:
         valid_contours.sort(key=lambda x: x[0], reverse=True)
         return [points for _, points in valid_contours]
 
+    def create_contour_preview(self, contours):
+        """Create a visual preview of the contours to be drawn."""
+        # Create a blank white image for preview
+        preview_img = np.ones((IMAGE_HEIGHT_PX, IMAGE_WIDTH_PX, 3), dtype=np.uint8) * 255
+        
+        # Draw each contour in a different color
+        colors = [
+            (0, 0, 255),    # Red
+            (0, 255, 0),    # Green  
+            (255, 0, 0),    # Blue
+            (0, 255, 255),  # Yellow
+            (255, 0, 255),  # Magenta
+            (255, 255, 0),  # Cyan
+            (128, 0, 128),  # Purple
+            (255, 165, 0),  # Orange
+        ]
+        
+        print(f"Creating preview for {len(contours)} contours...")
+        
+        for i, contour_points in enumerate(contours):
+            if len(contour_points) < 2:
+                continue
+                
+            color = colors[i % len(colors)]
+            
+            # Convert mm coordinates back to pixel coordinates for display
+            pixel_points = []
+            for mm_x, mm_y in contour_points:
+                # Reverse the coordinate transformation
+                px_x = int((mm_x - ORIGIN_X) / DRAWING_AREA_WIDTH_MM * IMAGE_WIDTH_PX)
+                px_y = int(IMAGE_HEIGHT_PX - (mm_y - ORIGIN_Y) / DRAWING_AREA_HEIGHT_MM * IMAGE_HEIGHT_PX)
+                # Clamp to image bounds
+                px_x = max(0, min(IMAGE_WIDTH_PX - 1, px_x))
+                px_y = max(0, min(IMAGE_HEIGHT_PX - 1, px_y))
+                pixel_points.append((px_x, px_y))
+            
+            # Draw the contour as connected lines
+            if len(pixel_points) >= 2:
+                for j in range(1, len(pixel_points)):
+                    cv2.line(preview_img, pixel_points[j-1], pixel_points[j], color, 2)
+                
+                # Draw start point as a circle
+                cv2.circle(preview_img, pixel_points[0], 4, (0, 0, 0), -1)
+                
+                # Add contour number
+                text_pos = pixel_points[0]
+                cv2.putText(preview_img, str(i+1), (text_pos[0]+10, text_pos[1]-10), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
+        
+        # Add drawing order arrows for first few contours
+        arrow_color = (50, 50, 50)
+        for i in range(min(5, len(contours)-1)):
+            if len(contours[i]) >= 2 and len(contours[i+1]) >= 2:
+                # Get end of current contour and start of next
+                curr_end = contours[i][-1]
+                next_start = contours[i+1][0]
+                
+                # Convert to pixels
+                curr_px = (int((curr_end[0] - ORIGIN_X) / DRAWING_AREA_WIDTH_MM * IMAGE_WIDTH_PX),
+                          int(IMAGE_HEIGHT_PX - (curr_end[1] - ORIGIN_Y) / DRAWING_AREA_HEIGHT_MM * IMAGE_HEIGHT_PX))
+                next_px = (int((next_start[0] - ORIGIN_X) / DRAWING_AREA_WIDTH_MM * IMAGE_WIDTH_PX),
+                          int(IMAGE_HEIGHT_PX - (next_start[1] - ORIGIN_Y) / DRAWING_AREA_HEIGHT_MM * IMAGE_HEIGHT_PX))
+                
+                # Clamp coordinates
+                curr_px = (max(0, min(IMAGE_WIDTH_PX-1, curr_px[0])), max(0, min(IMAGE_HEIGHT_PX-1, curr_px[1])))
+                next_px = (max(0, min(IMAGE_WIDTH_PX-1, next_px[0])), max(0, min(IMAGE_HEIGHT_PX-1, next_px[1])))
+                
+                # Draw dashed line to show travel path
+                cv2.arrowedLine(preview_img, curr_px, next_px, arrow_color, 1, tipLength=0.3)
+        
+        # Add legend
+        legend_y = 30
+        cv2.putText(preview_img, "Drawing Preview:", (10, legend_y), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2)
+        cv2.putText(preview_img, f"• {len(contours)} contours", (10, legend_y + 25), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
+        cv2.putText(preview_img, "• Black dots = start points", (10, legend_y + 45), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
+        cv2.putText(preview_img, "• Arrows = travel paths", (10, legend_y + 65), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
+        cv2.putText(preview_img, "Press 'd' to draw, 's' to save, any key to cancel", (10, legend_y + 90), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 100, 0), 1)
+        
+        return preview_img
+
     def draw_sketch(self, sketch_image):
         """OPTIMIZED: Draw the sketch with performance improvements."""
         if sketch_image is None:
@@ -576,6 +661,31 @@ class HorizontalTableDrawingRobot:
                     optimized.append(closest)
                     current_end = closest[-1] if closest else current_end
                 contours = optimized
+        
+        # Create and show preview
+        print("Creating drawing preview...")
+        preview_img = self.create_contour_preview(contours)
+        cv2.imshow("Drawing Preview - Check path and order", preview_img)
+        
+        print("\nPreview Controls:")
+        print("  'd' = Start drawing")
+        print("  's' = Save preview image") 
+        print("  Any other key = Cancel drawing")
+        
+        key = cv2.waitKey(0)
+        cv2.destroyAllWindows()
+        
+        if key == ord('s'):
+            preview_filename = "drawing_preview.jpg"
+            cv2.imwrite(preview_filename, preview_img)
+            print(f"Preview saved as {preview_filename}")
+            print("Press 'd' to draw or any other key to cancel:")
+            key = cv2.waitKey(0)
+            cv2.destroyAllWindows()
+        
+        if key != ord('d'):
+            print("Drawing cancelled.")
+            return
         
         print(f"Drawing {len(contours)} optimized contours...")
         print("="*60)
