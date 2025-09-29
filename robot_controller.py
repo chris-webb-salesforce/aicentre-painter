@@ -93,14 +93,15 @@ class RobotController:
             current_pos = self.mc.get_coords()
             if not current_pos or len(current_pos) < 3:
                 print("⚠️  Could not get current position, using direct move")
-                return self.move_and_wait_stopped(coords, speed, mode)
+                return self.synchronized_move(coords, speed, mode)
             
             # Generate interpolated path
             interpolated_points = self.interpolate_linear_path(current_pos, coords, max_segment_length=LINEAR_INTERPOLATION_MAX_SEGMENT)
             
+            # Use faster movement method for interpolated points
             success = True
             for point in interpolated_points:
-                if not self.move_and_wait_stopped(point, speed, mode, timeout=1.5):
+                if not self.synchronized_move(point, speed, mode, wait_for_completion=True):
                     print(f"⚠️  Failed to reach interpolated point: {point[:3]}")
                     success = False
                     break
@@ -109,7 +110,7 @@ class RobotController:
             
         except Exception as e:
             print(f"❌ Linear interpolation failed: {e}")
-            return self.move_and_wait_stopped(coords, speed, mode)
+            return self.synchronized_move(coords, speed, mode)
 
     def calculate_distance_compensation(self, x, y):
         """
@@ -439,12 +440,8 @@ class RobotController:
         # SAFETY: Use safe movement to get to position
         print(f"Moving safely to position ({x:.1f}, {y:.1f})")
         target_coords = [x, y, base_retract_z] + DRAWING_ORIENTATION
-        if TRAVEL_MOVEMENT_MODE == 1:
-            # Use robot's linear interpolation for travel
-            self.synchronized_move(target_coords, TRAVEL_SPEED, TRAVEL_MOVEMENT_MODE)
-        else:
-            # Use manual interpolation for travel  
-            self.move_linear_interpolated(target_coords, TRAVEL_SPEED, TRAVEL_MOVEMENT_MODE)
+        # Use appropriate movement mode for travel
+        self.synchronized_move(target_coords, TRAVEL_SPEED, TRAVEL_MOVEMENT_MODE)
         
         # Gradual approach to drawing surface in steps
         approach_steps = 3
@@ -507,14 +504,11 @@ class RobotController:
         target_coords = [x2, y2, PEN_DRAWING_Z] + DRAWING_ORIENTATION
         
         if DRAWING_MOVEMENT_MODE == 1:
-            # Use robot's built-in linear interpolation (mode 1)
+            # Use robot's built-in linear interpolation (mode 1) - much more efficient
             self.synchronized_move(target_coords, DRAWING_SPEED, DRAWING_MOVEMENT_MODE)
-        elif distance < MIN_SEGMENT_LENGTH:
-            # For short segments, single smooth movement  
-            self.synchronized_move(target_coords, DRAWING_SPEED, 0)
         else:
-            # For longer segments, use our manual linear interpolation
-            self.move_linear_interpolated(target_coords, DRAWING_SPEED, 0)
+            # Use standard joint interpolation (mode 0) for speed
+            self.synchronized_move(target_coords, DRAWING_SPEED, 0)
         
         self.current_position = [x2, y2]
 

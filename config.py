@@ -39,7 +39,7 @@ TRAVEL_SPEED = 40  # Moderate travel to reduce vibration
 # Movement interpolation settings (STABILIZED)
 INTERPOLATION_POINTS = 4  # More interpolation points for smoother curves
 MIN_SEGMENT_LENGTH = 3.0  # Smaller segments for better precision
-LINEAR_INTERPOLATION_MAX_SEGMENT = 3.0  # Maximum segment length before linear interpolation kicks in
+LINEAR_INTERPOLATION_MAX_SEGMENT = 10.0  # Maximum segment length before linear interpolation kicks in (increased for speed)
 
 # --- Movement Mode Settings ---
 # Mode 0: Joint interpolation (fastest, may arc)
@@ -135,7 +135,7 @@ DRAWING_ORIENTATION = [180, 0, 45]
 # --- Movement Synchronization Settings ---
 USE_MOVEMENT_SYNC = True  # Enable proper movement waiting
 MAX_WAIT_TIME = 3.0  # Maximum time to wait for movement completion
-POSITION_TOLERANCE = 2.0  # mm tolerance for position checking (looser for speed)
+POSITION_TOLERANCE = 3.0  # mm tolerance for position checking (looser for speed)
 POSITION_CHECK_INTERVAL = 0.02  # Check position every 20ms
 
 # Desired J6 angle for pen holder
