@@ -44,6 +44,115 @@ class RobotController:
         
         print("✅ Robot Controller initialized successfully")
 
+    def calculate_distance_compensation(self, x, y):
+        """
+        Calculate Z compensation based on distance from robot base.
+        Further positions get higher Z values to compensate for arm deflection.
+        """
+        if not ENABLE_DISTANCE_COMPENSATION:
+            return 0.0
+        
+        # Calculate distance from robot base
+        distance = np.sqrt((x - BASE_POSITION_X)**2 + (y - BASE_POSITION_Y)**2)
+        
+        # Apply deadzone - no compensation for positions close to base
+        if distance <= COMPENSATION_DEADZONE:
+            return 0.0
+        
+        # Normalize distance beyond deadzone
+        effective_distance = distance - COMPENSATION_DEADZONE
+        max_effective_distance = MAX_REACH_DISTANCE - COMPENSATION_DEADZONE
+        
+        if max_effective_distance <= 0:
+            return 0.0
+        
+        # Calculate normalized distance (0 to 1)
+        normalized_distance = min(effective_distance / max_effective_distance, 1.0)
+        
+        # Apply compensation curve
+        if Z_COMPENSATION_CURVE == "quadratic":
+            compensation_factor = normalized_distance ** 2
+        elif Z_COMPENSATION_CURVE == "cubic":
+            compensation_factor = normalized_distance ** 3
+        else:  # linear (default)
+            compensation_factor = normalized_distance
+        
+        # Calculate final compensation
+        compensation = compensation_factor * Z_COMPENSATION_MAX
+        
+        return compensation
+
+    def apply_z_compensation(self, coords):
+        """Apply distance-based Z compensation to coordinates."""
+        if len(coords) < 3:
+            return coords
+        
+        compensated_coords = coords.copy()
+        x, y = coords[0], coords[1]
+        
+        # Calculate and apply compensation
+        compensation = self.calculate_distance_compensation(x, y)
+        compensated_coords[2] += compensation
+        
+        return compensated_coords
+
+    def validate_z_coordinate(self, z):
+        """Validate Z coordinate for safety and clamp to safe range."""
+        if z < MIN_SAFE_Z:
+            print(f"⚠️  WARNING: Z coordinate {z:.2f} below safety minimum {MIN_SAFE_Z:.2f}mm. Clamping to safe value.")
+            return MIN_SAFE_Z + SAFETY_MARGIN
+        elif z > MAX_SAFE_Z:
+            print(f"⚠️  WARNING: Z coordinate {z:.2f} above safety maximum {MAX_SAFE_Z:.2f}mm. Clamping to safe value.")
+            return MAX_SAFE_Z - SAFETY_MARGIN
+        return z
+
+    def safe_move_to_position(self, x, y, target_z=None, speed=TRAVEL_SPEED):
+        """
+        Safely move to a position by always traveling at safe height first.
+        This prevents the robot from going below table level during position changes.
+        """
+        if target_z is None:
+            target_z = SAFE_TRAVEL_HEIGHT
+        
+        # Validate target Z coordinate
+        target_z = self.validate_z_coordinate(target_z)
+        
+        # Step 1: Always lift to safe travel height first (if not already there)
+        current_pos = self.mc.get_coords()
+        if current_pos and current_pos[2] < SAFE_TRAVEL_HEIGHT - 5:  # 5mm tolerance
+            print(f"Lifting to safe travel height ({SAFE_TRAVEL_HEIGHT:.1f}mm)")
+            safe_coords = [current_pos[0], current_pos[1], SAFE_TRAVEL_HEIGHT] + DRAWING_ORIENTATION
+            compensated_coords = self.apply_z_compensation(safe_coords)
+            self.mc.send_coords(compensated_coords, LIFT_SPEED, 0)
+            
+            if self.use_movement_sync:
+                self.wait_for_movement_completion(compensated_coords[:3], timeout=2.0)
+            else:
+                time.sleep(1.0)
+        
+        # Step 2: Move to target X,Y at safe height
+        travel_coords = [x, y, SAFE_TRAVEL_HEIGHT] + DRAWING_ORIENTATION
+        compensated_coords = self.apply_z_compensation(travel_coords)
+        self.mc.send_coords(compensated_coords, speed, 0)
+        
+        if self.use_movement_sync:
+            self.wait_for_movement_completion(compensated_coords[:3])
+        else:
+            time.sleep(0.5)
+        
+        # Step 3: Move to final Z position if different from safe height
+        if abs(target_z - SAFE_TRAVEL_HEIGHT) > 1.0:  # Only if significantly different
+            final_coords = [x, y, target_z] + DRAWING_ORIENTATION
+            compensated_coords = self.apply_z_compensation(final_coords)
+            self.mc.send_coords(compensated_coords, APPROACH_SPEED, 0)
+            
+            if self.use_movement_sync:
+                self.wait_for_movement_completion(compensated_coords[:3])
+            else:
+                time.sleep(0.3)
+        
+        return True
+
     def check_force_feedback(self):
         """Monitor force feedback and adjust Z if needed."""
         current_time = time.time()
@@ -123,7 +232,14 @@ class RobotController:
     def synchronized_move(self, coords, speed, mode=0, wait_for_completion=True):
         """Send movement command and optionally wait for completion."""
         try:
-            self.mc.send_coords(coords, speed, mode)
+            # Apply safety validation to Z coordinate
+            safe_coords = coords.copy()
+            if len(safe_coords) >= 3:
+                safe_coords[2] = self.validate_z_coordinate(safe_coords[2])
+            
+            # Apply distance-based Z compensation
+            compensated_coords = self.apply_z_compensation(safe_coords)
+            self.mc.send_coords(compensated_coords, speed, mode)
             
             if wait_for_completion and self.use_movement_sync:
                 # For drawing movements, use shorter timeout 
@@ -167,22 +283,29 @@ class RobotController:
         """Gently lower the pen to the drawing surface with smooth transition."""
         if self.pen_is_down:
             return
-            
-        # Move to position above the point
-        self.synchronized_move([x, y, PEN_RETRACT_Z] + DRAWING_ORIENTATION, TRAVEL_SPEED, 0)
+        
+        # Calculate base Z positions (compensation will be applied in synchronized_move)
+        base_retract_z = PEN_RETRACT_Z
+        base_drawing_z = PEN_DRAWING_Z
+        
+        # SAFETY: Use safe movement to get to position
+        print(f"Moving safely to position ({x:.1f}, {y:.1f})")
+        self.safe_move_to_position(x, y, base_retract_z, TRAVEL_SPEED)
         
         # Gradual approach to drawing surface in steps
         approach_steps = 3
         for i in range(1, approach_steps + 1):
-            z_position = PEN_RETRACT_Z - ((PEN_RETRACT_Z - PEN_DRAWING_Z) * (i / approach_steps))
+            z_position = base_retract_z - ((base_retract_z - base_drawing_z) * (i / approach_steps))
             self.synchronized_move([x, y, z_position] + DRAWING_ORIENTATION, int(APPROACH_SPEED // 2), 0)
         
         # Final positioning at drawing depth
-        self.synchronized_move([x, y, PEN_DRAWING_Z] + DRAWING_ORIENTATION, int(APPROACH_SPEED // 3), 0)
+        self.synchronized_move([x, y, base_drawing_z] + DRAWING_ORIENTATION, int(APPROACH_SPEED // 3), 0)
         
         self.pen_is_down = True
         self.current_position = [x, y]
-        self.current_z_depth = PEN_DRAWING_Z
+        # Store the compensated Z depth for later reference
+        compensation = self.calculate_distance_compensation(x, y)
+        self.current_z_depth = base_drawing_z + compensation
         self.movement_counter = 0
     
     def gentle_pen_up(self):
@@ -192,10 +315,15 @@ class RobotController:
             
         current = self.mc.get_coords()
         if current:
+            # SAFETY: Always lift to safe retract height
+            print(f"Lifting pen safely from ({current[0]:.1f}, {current[1]:.1f})")
+            
             # Gradual lift in steps to prevent jerky movement
             lift_steps = 2
             for i in range(1, lift_steps + 1):
                 z_position = self.current_z_depth + ((PEN_RETRACT_Z - self.current_z_depth) * (i / lift_steps))
+                # Validate each lift step for safety
+                z_position = self.validate_z_coordinate(z_position)
                 self.synchronized_move([current[0], current[1], z_position] + DRAWING_ORIENTATION, int(LIFT_SPEED // 2), 0)
         
         self.pen_is_down = False
@@ -223,7 +351,8 @@ class RobotController:
         
         if distance < MIN_SEGMENT_LENGTH:
             # For short segments, single smooth movement
-            self.synchronized_move([x2, y2, self.current_z_depth] + DRAWING_ORIENTATION, DRAWING_SPEED, 0)
+            # Use base drawing Z (compensation applied in synchronized_move)
+            self.synchronized_move([x2, y2, PEN_DRAWING_Z] + DRAWING_ORIENTATION, DRAWING_SPEED, 0)
         else:
             # More interpolation points for smoother curves
             num_points = max(2, min(INTERPOLATION_POINTS, int(distance / MIN_SEGMENT_LENGTH)))
@@ -239,7 +368,8 @@ class RobotController:
                     speed = DRAWING_SPEED
                 
                 # Synchronized movement with proper waiting
-                self.synchronized_move([x, y, self.current_z_depth] + DRAWING_ORIENTATION, speed, 0)
+                # Use base drawing Z (compensation applied in synchronized_move)
+                self.synchronized_move([x, y, PEN_DRAWING_Z] + DRAWING_ORIENTATION, speed, 0)
                 
                 # Check force feedback and stabilize periodically
                 if i % 2 == 0:  # Every other point
@@ -252,9 +382,8 @@ class RobotController:
         """Move to drawing start position."""
         print("Moving to drawing start position...")
         self.gentle_pen_up()
-        # Position robot ready for drawing on flat table
-        initial_coords = [ORIGIN_X, ORIGIN_Y, PEN_RETRACT_Z] + DRAWING_ORIENTATION
-        self.synchronized_move(initial_coords, 40, 0)
+        # SAFETY: Use safe movement to home position
+        self.safe_move_to_position(ORIGIN_X, ORIGIN_Y, PEN_RETRACT_Z, 40)
     
     def go_to_photo_position(self):
         """Move to photo capture position."""
@@ -276,3 +405,145 @@ class RobotController:
         except Exception as e:
             print(f"❌ Failed to get current position: {e}")
             return None
+
+    def test_distance_compensation(self):
+        """Test and visualize the distance compensation at various positions."""
+        print("\n--- DISTANCE COMPENSATION TEST ---")
+        print(f"Compensation enabled: {ENABLE_DISTANCE_COMPENSATION}")
+        print(f"Max compensation: {Z_COMPENSATION_MAX}mm")
+        print(f"Compensation curve: {Z_COMPENSATION_CURVE}")
+        print(f"Deadzone: {COMPENSATION_DEADZONE}mm")
+        print()
+        
+        # Test positions at various distances
+        test_positions = [
+            (ORIGIN_X, ORIGIN_Y),  # At origin
+            (ORIGIN_X + 50, ORIGIN_Y + 50),   # Close to base
+            (ORIGIN_X + 150, ORIGIN_Y + 100), # Medium distance
+            (ORIGIN_X + 250, ORIGIN_Y + 150), # Far from base
+            (ORIGIN_X + 350, ORIGIN_Y + 200), # Very far
+        ]
+        
+        print("Position Test Results:")
+        print("X(mm)    Y(mm)    Distance(mm)  Compensation(mm)")
+        print("-" * 50)
+        
+        for x, y in test_positions:
+            distance = np.sqrt((x - BASE_POSITION_X)**2 + (y - BASE_POSITION_Y)**2)
+            compensation = self.calculate_distance_compensation(x, y)
+            print(f"{x:6.1f}   {y:6.1f}   {distance:8.1f}     {compensation:8.3f}")
+        
+        print()
+        
+        # Show compensation curve visualization
+        print("Distance vs Compensation curve:")
+        distances = [0, 50, 100, 150, 200, 250, 300, 350, 400]
+        for dist in distances:
+            # Test position at this distance
+            x = BASE_POSITION_X + dist
+            y = BASE_POSITION_Y
+            comp = self.calculate_distance_compensation(x, y)
+            bar_length = int(comp * 10)  # Scale for visualization
+            bar = "█" * bar_length
+            print(f"{dist:3.0f}mm: {comp:5.2f}mm |{bar}")
+
+    def calibrate_compensation_interactively(self):
+        """Interactive calibration of Z compensation parameters."""
+        print("\n--- INTERACTIVE COMPENSATION CALIBRATION ---")
+        print("This will help you find optimal compensation values.")
+        print()
+        
+        # Move to a test position far from base
+        test_x = ORIGIN_X + 200  # 200mm from origin
+        test_y = ORIGIN_Y + 150  # 150mm from origin
+        test_distance = np.sqrt((test_x - BASE_POSITION_X)**2 + (test_y - BASE_POSITION_Y)**2)
+        
+        print(f"Moving to test position: ({test_x:.1f}, {test_y:.1f})")
+        print(f"Distance from base: {test_distance:.1f}mm")
+        print()
+        
+        # Move to position with current compensation
+        self.go_to_home_position()
+        time.sleep(1)
+        
+        print("Testing current compensation...")
+        self.gentle_pen_down(test_x, test_y)
+        time.sleep(2)
+        self.gentle_pen_up()
+        
+        print("\nAdjust compensation parameters in config.py:")
+        print(f"Current Z_COMPENSATION_MAX: {Z_COMPENSATION_MAX}")
+        print(f"Current Z_COMPENSATION_CURVE: {Z_COMPENSATION_CURVE}")
+        print(f"Current COMPENSATION_DEADZONE: {COMPENSATION_DEADZONE}")
+        
+        print("\nRecommendations:")
+        print("- If pen is too low (digging): Increase Z_COMPENSATION_MAX")
+        print("- If pen is too high (not touching): Decrease Z_COMPENSATION_MAX") 
+        print("- For gradual compensation: Use 'linear' curve")
+        print("- For rapid compensation at distance: Use 'quadratic' or 'cubic'")
+        
+        self.go_to_home_position()
+
+    def test_safety_system(self):
+        """Test the safety system to ensure it prevents dangerous movements."""
+        print("\n--- SAFETY SYSTEM TEST ---")
+        print(f"Safe travel height: {SAFE_TRAVEL_HEIGHT}mm")
+        print(f"Minimum safe Z: {MIN_SAFE_Z}mm") 
+        print(f"Maximum safe Z: {MAX_SAFE_Z}mm")
+        print()
+        
+        # Test 1: Safe position movement
+        print("Test 1: Safe position movement")
+        test_positions = [
+            (ORIGIN_X + 100, ORIGIN_Y + 50),
+            (ORIGIN_X - 50, ORIGIN_Y + 100),
+            (ORIGIN_X + 150, ORIGIN_Y - 30),
+        ]
+        
+        for i, (x, y) in enumerate(test_positions):
+            print(f"  Moving safely to position {i+1}: ({x:.1f}, {y:.1f})")
+            try:
+                self.safe_move_to_position(x, y)
+                print(f"  ✅ Position {i+1} completed safely")
+                time.sleep(0.5)
+            except Exception as e:
+                print(f"  ❌ Position {i+1} failed: {e}")
+        
+        print()
+        
+        # Test 2: Z coordinate validation
+        print("Test 2: Z coordinate validation")
+        test_z_values = [
+            ORIGIN_Z - 20,  # Too low (should be clamped)
+            ORIGIN_Z + 300, # Too high (should be clamped)
+            ORIGIN_Z,       # Normal
+            PEN_DRAWING_Z,  # Normal drawing height
+        ]
+        
+        for z in test_z_values:
+            validated_z = self.validate_z_coordinate(z)
+            status = "✅ OK" if validated_z == z else f"⚠️  Clamped from {z:.1f} to {validated_z:.1f}"
+            print(f"  Z={z:6.1f}mm → {validated_z:6.1f}mm {status}")
+        
+        print()
+        
+        # Test 3: Safe pen operations
+        print("Test 3: Safe pen operations")
+        test_x, test_y = ORIGIN_X + 80, ORIGIN_Y + 60
+        
+        try:
+            print(f"  Testing safe pen down at ({test_x:.1f}, {test_y:.1f})")
+            self.gentle_pen_down(test_x, test_y)
+            time.sleep(1)
+            
+            print("  Testing safe pen up")
+            self.gentle_pen_up()
+            time.sleep(1)
+            
+            print("  ✅ Safe pen operations completed")
+        except Exception as e:
+            print(f"  ❌ Safe pen operations failed: {e}")
+        
+        # Return to safe position
+        self.go_to_home_position()
+        print("✅ Safety system test completed")

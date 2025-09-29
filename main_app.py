@@ -88,8 +88,8 @@ class DrawingApplication:
             print("CSV export not implemented in refactor")
         
         if choice in ['3', '5']:
-            # Export G-code
-            gcode_file = self.gcode.export_gcode(contours)
+            # Export optimized G-code
+            gcode_file = self.gcode.export_optimized_gcode(contours)
             if gcode_file:
                 exported_files.append(gcode_file)
         
@@ -159,10 +159,10 @@ class DrawingApplication:
             key = cv2.waitKey(0)
             cv2.destroyAllWindows()
         elif key == ord('g'):
-            # Export G-code
-            gcode_file = self.gcode.export_gcode(contours)
+            # Export optimized G-code
+            gcode_file = self.gcode.export_optimized_gcode(contours)
             if gcode_file:
-                print(f"G-code exported to {gcode_file}")
+                print(f"Optimized G-code exported to {gcode_file}")
                 execute_now = input("Execute G-code drawing now? (y/n): ").lower().strip()
                 if execute_now == 'y':
                     speed = input("Enter drawing speed (1-100, default 50): ").strip()
@@ -290,6 +290,21 @@ class DrawingApplication:
         test = input("Would you like to test the drawing area? (y/n): ").lower().strip()
         if test == 'y':
             self.workspace.test_drawing_area()
+        
+        # Test distance compensation
+        test_comp = input("Would you like to test distance compensation? (y/n): ").lower().strip()
+        if test_comp == 'y':
+            self.robot.test_distance_compensation()
+            
+            # Offer interactive calibration
+            calibrate_comp = input("Would you like to calibrate compensation interactively? (y/n): ").lower().strip()
+            if calibrate_comp == 'y':
+                self.robot.calibrate_compensation_interactively()
+        
+        # Test safety system
+        test_safety = input("Would you like to test the safety system? (y/n): ").lower().strip()
+        if test_safety == 'y':
+            self.robot.test_safety_system()
 
     def run_main_loop(self):
         """Run the main application loop."""
