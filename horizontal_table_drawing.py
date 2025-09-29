@@ -128,6 +128,11 @@ class HorizontalTableDrawingRobot:
         # Force feedback monitoring
         self.last_force_check = time.time()
         self.force_warnings = 0
+        
+        # Movement synchronization settings
+        self.use_movement_sync = True  # Enable proper movement waiting
+        self.max_wait_time = 10.0  # Maximum time to wait for movement completion
+        self.position_tolerance = 1.0  # mm tolerance for position checking
     
     def check_force_feedback(self):
         """Monitor force feedback and adjust Z if needed."""
@@ -164,6 +169,78 @@ class HorizontalTableDrawingRobot:
         if current:
             # Brief stabilization pause
             time.sleep(0.02)
+    
+    def wait_for_movement_completion(self, target_position, timeout=None):
+        """Wait for robot to reach target position before proceeding."""
+        if not self.use_movement_sync:
+            return True
+        
+        if timeout is None:
+            timeout = self.max_wait_time
+        
+        start_time = time.time()
+        
+        while time.time() - start_time < timeout:
+            try:
+                current_pos = self.mc.get_coords()
+                if current_pos and len(current_pos) >= 3 and len(target_position) >= 3:
+                    # Calculate distance to target (only check X, Y, Z)
+                    distance = np.sqrt(sum((current_pos[i] - target_position[i])**2 for i in range(3)))
+                    
+                    if distance <= self.position_tolerance:
+                        return True
+                    
+                    # Small delay before next check
+                    time.sleep(0.05)
+                else:
+                    # Fallback if get_coords fails
+                    time.sleep(0.1)
+                    
+            except Exception as e:
+                # If position checking fails, use fallback timing
+                time.sleep(0.1)
+                
+        print(f"⚠️  Movement timeout after {timeout}s - continuing anyway")
+        return False
+    
+    def synchronized_move(self, coords, speed, mode=0, wait_for_completion=True):
+        """Send movement command and optionally wait for completion."""
+        try:
+            self.mc.send_coords(coords, speed, mode)
+            
+            if wait_for_completion and self.use_movement_sync:
+                # Wait for movement to complete
+                success = self.wait_for_movement_completion(coords[:3])  # Only check X,Y,Z
+                if not success:
+                    print(f"Movement may not have completed: {coords[:3]}")
+                return success
+            else:
+                # Use fallback timing if sync is disabled
+                movement_time = max(0.1, speed / 100.0)  # Estimate based on speed
+                time.sleep(movement_time)
+                return True
+                
+        except Exception as e:
+            print(f"❌ Movement command failed: {e}")
+            return False
+    
+    def synchronized_angles(self, angles, speed, wait_for_completion=True):
+        """Send angle command and optionally wait for completion.""" 
+        try:
+            self.mc.send_angles(angles, speed)
+            
+            if wait_for_completion and self.use_movement_sync:
+                # For angle movements, use time-based waiting since position checking is harder
+                movement_time = max(2.0, speed / 20.0)  # Conservative estimate
+                time.sleep(movement_time)
+                return True
+            else:
+                time.sleep(max(1.0, speed / 30.0))
+                return True
+                
+        except Exception as e:
+            print(f"❌ Angle command failed: {e}")
+            return False
         
     def calibrate_pen_pressure(self):
         """Interactive calibration to find optimal pen pressure."""
@@ -241,19 +318,16 @@ class HorizontalTableDrawingRobot:
             return
             
         # Move to position above the point
-        self.mc.send_coords([x, y, PEN_RETRACT_Z] + self.DRAWING_ORIENTATION, TRAVEL_SPEED, 0)
-        time.sleep(0.3)  # Allow arm to stabilize
+        self.synchronized_move([x, y, PEN_RETRACT_Z] + self.DRAWING_ORIENTATION, TRAVEL_SPEED, 0)
         
         # Gradual approach to drawing surface in steps
         approach_steps = 3
         for i in range(1, approach_steps + 1):
             z_position = PEN_RETRACT_Z - ((PEN_RETRACT_Z - PEN_DRAWING_Z) * (i / approach_steps))
-            self.mc.send_coords([x, y, z_position] + self.DRAWING_ORIENTATION, int(APPROACH_SPEED // 2), 0)
-            time.sleep(0.1)  # Small settling time between steps
+            self.synchronized_move([x, y, z_position] + self.DRAWING_ORIENTATION, int(APPROACH_SPEED // 2), 0)
         
         # Final positioning at drawing depth
-        self.mc.send_coords([x, y, PEN_DRAWING_Z] + self.DRAWING_ORIENTATION, int(APPROACH_SPEED // 3), 0)
-        time.sleep(0.2)  # Final settling time
+        self.synchronized_move([x, y, PEN_DRAWING_Z] + self.DRAWING_ORIENTATION, int(APPROACH_SPEED // 3), 0)
         
         self.pen_is_down = True
         self.current_position = [x, y]
@@ -271,8 +345,7 @@ class HorizontalTableDrawingRobot:
             lift_steps = 2
             for i in range(1, lift_steps + 1):
                 z_position = self.current_z_depth + ((PEN_RETRACT_Z - self.current_z_depth) * (i / lift_steps))
-                self.mc.send_coords([current[0], current[1], z_position] + self.DRAWING_ORIENTATION, int(LIFT_SPEED // 2), 0)
-                time.sleep(0.08)
+                self.synchronized_move([current[0], current[1], z_position] + self.DRAWING_ORIENTATION, int(LIFT_SPEED // 2), 0)
         
         self.pen_is_down = False
         self.current_z_depth = PEN_RETRACT_Z
@@ -299,8 +372,7 @@ class HorizontalTableDrawingRobot:
         
         if distance < MIN_SEGMENT_LENGTH:
             # For short segments, single smooth movement
-            self.mc.send_coords([x2, y2, self.current_z_depth] + self.DRAWING_ORIENTATION, DRAWING_SPEED, 0)
-            time.sleep(MOVEMENT_SETTLING_TIME)  # Consistent settling time
+            self.synchronized_move([x2, y2, self.current_z_depth] + self.DRAWING_ORIENTATION, DRAWING_SPEED, 0)
         else:
             # More interpolation points for smoother curves
             num_points = max(2, min(INTERPOLATION_POINTS, int(distance / MIN_SEGMENT_LENGTH)))
@@ -315,8 +387,8 @@ class HorizontalTableDrawingRobot:
                 else:
                     speed = DRAWING_SPEED
                 
-                self.mc.send_coords([x, y, self.current_z_depth] + self.DRAWING_ORIENTATION, speed, 0)
-                time.sleep(MOVEMENT_SETTLING_TIME)  # Consistent settling time
+                # Synchronized movement with proper waiting
+                self.synchronized_move([x, y, self.current_z_depth] + self.DRAWING_ORIENTATION, speed, 0)
                 
                 # Check force feedback and stabilize periodically
                 if i % 2 == 0:  # Every other point
@@ -331,22 +403,19 @@ class HorizontalTableDrawingRobot:
         self.gentle_pen_up()
         # Position robot ready for drawing on flat table
         initial_coords = [ORIGIN_X, ORIGIN_Y, PEN_RETRACT_Z] + self.DRAWING_ORIENTATION
-        self.mc.send_coords(initial_coords, 40, 0)
-        time.sleep(3)
+        self.synchronized_move(initial_coords, 40, 0)
         # Pen holder angle set by Cartesian RZ=45
     
     def go_to_photo_position(self):
         """Move to photo capture position."""
         print("Moving to photo position...")
-        self.mc.send_angles([0, -45, -45, 0, 90, 0], 40)
-        time.sleep(3)
+        self.synchronized_angles([0, -45, -45, 0, 90, 0], 40)
     
     def go_to_safe_position(self):
         """Move to neutral safe position when not drawing."""
         print("Moving to safe neutral position...")
         self.gentle_pen_up()
-        self.mc.send_angles([0, 0, 0, 0, 90, self.DESIRED_J6_ANGLE], 40)  # J6 at desired angle
-        time.sleep(3)
+        self.synchronized_angles([0, 0, 0, 0, 90, self.DESIRED_J6_ANGLE], 40)  # J6 at desired angle
     
     def test_coordinate_system(self):
         """Test coordinate system and transformations."""
@@ -390,8 +459,7 @@ class HorizontalTableDrawingRobot:
         # Move to start position
         print("Moving to start position...")
         start_x, start_y = test_corners[0]
-        self.mc.send_coords([start_x, start_y, PEN_RETRACT_Z] + self.DRAWING_ORIENTATION, TRAVEL_SPEED, 0)
-        time.sleep(2)
+        self.synchronized_move([start_x, start_y, PEN_RETRACT_Z] + self.DRAWING_ORIENTATION, TRAVEL_SPEED, 0)
         
         # Draw test rectangle
         print("Drawing test rectangle...")
@@ -1285,6 +1353,14 @@ if __name__ == "__main__":
         """Main execution loop."""
         print("\\n--- MyCobot Vertical Drawing System ---")
         print("Optimized for gentle vertical surface drawing\\n")
+        
+        # Movement synchronization option
+        sync_option = input("Use movement synchronization? (Y/n): ").lower().strip()
+        if sync_option == 'n':
+            self.use_movement_sync = False
+            print("Movement synchronization disabled - using time-based delays")
+        else:
+            print("Movement synchronization enabled - waiting for completion")
         
         # Offer calibration option
         calibrate = input("Would you like to calibrate pen pressure? (y/n): ").lower().strip()
