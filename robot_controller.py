@@ -52,6 +52,64 @@ class RobotController:
             print(f"⚠️  Could not enable fresh mode: {e}")
         
         print("✅ Robot Controller initialized successfully")
+    
+    def interpolate_linear_path(self, start_coords, end_coords, max_segment_length=5.0):
+        """
+        Break a long move into smaller linear segments to reduce arcing.
+        Returns list of intermediate coordinates.
+        """
+        if len(start_coords) < 3 or len(end_coords) < 3:
+            return [end_coords]
+        
+        # Calculate distance
+        distance = np.sqrt(sum((end_coords[i] - start_coords[i])**2 for i in range(3)))
+        
+        if distance <= max_segment_length:
+            return [end_coords]  # Short enough, no interpolation needed
+        
+        # Calculate number of segments
+        num_segments = int(np.ceil(distance / max_segment_length))
+        
+        # Generate intermediate points
+        interpolated_points = []
+        for i in range(1, num_segments + 1):
+            t = i / num_segments
+            interpolated_point = []
+            for j in range(len(end_coords)):
+                if j < 3:  # X, Y, Z coordinates
+                    interpolated_point.append(start_coords[j] + t * (end_coords[j] - start_coords[j]))
+                else:  # Orientation values, copy from end_coords
+                    interpolated_point.append(end_coords[j])
+            interpolated_points.append(interpolated_point)
+        
+        return interpolated_points
+    
+    def move_linear_interpolated(self, coords, speed, mode=0):
+        """
+        Move to coordinates using linear interpolation to minimize arcing.
+        """
+        try:
+            # Get current position
+            current_pos = self.mc.get_coords()
+            if not current_pos or len(current_pos) < 3:
+                print("⚠️  Could not get current position, using direct move")
+                return self.move_and_wait_stopped(coords, speed, mode)
+            
+            # Generate interpolated path
+            interpolated_points = self.interpolate_linear_path(current_pos, coords, max_segment_length=LINEAR_INTERPOLATION_MAX_SEGMENT)
+            
+            success = True
+            for point in interpolated_points:
+                if not self.move_and_wait_stopped(point, speed, mode, timeout=1.5):
+                    print(f"⚠️  Failed to reach interpolated point: {point[:3]}")
+                    success = False
+                    break
+            
+            return success
+            
+        except Exception as e:
+            print(f"❌ Linear interpolation failed: {e}")
+            return self.move_and_wait_stopped(coords, speed, mode)
 
     def calculate_distance_compensation(self, x, y):
         """
@@ -372,7 +430,13 @@ class RobotController:
         
         # SAFETY: Use safe movement to get to position
         print(f"Moving safely to position ({x:.1f}, {y:.1f})")
-        self.safe_move_to_position(x, y, base_retract_z, TRAVEL_SPEED)
+        target_coords = [x, y, base_retract_z] + DRAWING_ORIENTATION
+        if TRAVEL_MOVEMENT_MODE == 1:
+            # Use robot's linear interpolation for travel
+            self.synchronized_move(target_coords, TRAVEL_SPEED, TRAVEL_MOVEMENT_MODE)
+        else:
+            # Use manual interpolation for travel  
+            self.move_linear_interpolated(target_coords, TRAVEL_SPEED, TRAVEL_MOVEMENT_MODE)
         
         # Gradual approach to drawing surface in steps
         approach_steps = 3
@@ -431,32 +495,18 @@ class RobotController:
                 self.current_z_depth = max(PEN_DRAWING_Z - 0.5, 
                                           min(PEN_DRAWING_Z + 0.3, self.current_z_depth))
         
-        if distance < MIN_SEGMENT_LENGTH:
-            # For short segments, single smooth movement
-            # Use base drawing Z (compensation applied in synchronized_move)
-            self.synchronized_move([x2, y2, PEN_DRAWING_Z] + DRAWING_ORIENTATION, DRAWING_SPEED, 0)
+        # Use appropriate movement mode for drawing
+        target_coords = [x2, y2, PEN_DRAWING_Z] + DRAWING_ORIENTATION
+        
+        if DRAWING_MOVEMENT_MODE == 1:
+            # Use robot's built-in linear interpolation (mode 1)
+            self.synchronized_move(target_coords, DRAWING_SPEED, DRAWING_MOVEMENT_MODE)
+        elif distance < MIN_SEGMENT_LENGTH:
+            # For short segments, single smooth movement  
+            self.synchronized_move(target_coords, DRAWING_SPEED, 0)
         else:
-            # More interpolation points for smoother curves
-            num_points = max(2, min(INTERPOLATION_POINTS, int(distance / MIN_SEGMENT_LENGTH)))
-            for i in range(1, num_points + 1):
-                ratio = i / num_points
-                x = x1 + (x2 - x1) * ratio
-                y = y1 + (y2 - y1) * ratio
-                
-                # Smooth speed ramping for better control
-                if i == 1 or i == num_points:
-                    speed = int(DRAWING_SPEED * 0.8)  # Slower at segment endpoints
-                else:
-                    speed = DRAWING_SPEED
-                
-                # Synchronized movement with proper waiting
-                # Use base drawing Z (compensation applied in synchronized_move)
-                self.synchronized_move([x, y, PEN_DRAWING_Z] + DRAWING_ORIENTATION, speed, 0)
-                
-                # Check force feedback and stabilize periodically
-                if i % 2 == 0:  # Every other point
-                    self.check_force_feedback()
-                    self.stabilize_arm_position()
+            # For longer segments, use our manual linear interpolation
+            self.move_linear_interpolated(target_coords, DRAWING_SPEED, 0)
         
         self.current_position = [x2, y2]
 

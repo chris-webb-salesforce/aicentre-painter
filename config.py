@@ -39,6 +39,14 @@ TRAVEL_SPEED = 40  # Moderate travel to reduce vibration
 # Movement interpolation settings (STABILIZED)
 INTERPOLATION_POINTS = 4  # More interpolation points for smoother curves
 MIN_SEGMENT_LENGTH = 3.0  # Smaller segments for better precision
+LINEAR_INTERPOLATION_MAX_SEGMENT = 3.0  # Maximum segment length before linear interpolation kicks in
+
+# --- Movement Mode Settings ---
+# Mode 0: Joint interpolation (fastest, may arc)
+# Mode 1: Linear interpolation (straightest, slower, potential singularities) 
+# Mode 9: Joint space with orientation (balanced)
+DRAWING_MOVEMENT_MODE = 1  # Use linear interpolation for straight lines
+TRAVEL_MOVEMENT_MODE = 0   # Use joint interpolation for faster travel moves
 MOVEMENT_SETTLING_TIME = 0.05  # Time to let arm settle between movements
 
 # --- Force Protection and Depth Control Settings ---
