@@ -126,13 +126,14 @@ class ImageProcessor:
                 approx = cv2.approxPolyDP(contour, epsilon, True)
                 
                 if len(approx) >= 2:  # Need at least 2 points
-                    # Pre-convert to mm coordinates
+                    # Pre-convert to mm coordinates with explicit Z coordinate
                     mm_points = []
                     for point in approx:
                         px_x, px_y = point[0]
                         mm_x = ORIGIN_X + (px_x / IMAGE_WIDTH_PX) * DRAWING_AREA_WIDTH_MM
                         mm_y = ORIGIN_Y + DRAWING_AREA_HEIGHT_MM - (px_y / IMAGE_HEIGHT_PX) * DRAWING_AREA_HEIGHT_MM
-                        mm_points.append((mm_x, mm_y))
+                        mm_z = PEN_DRAWING_Z  # Explicitly set safe drawing height
+                        mm_points.append((mm_x, mm_y, mm_z))
                     valid_contours.append((area, mm_points))
             except:
                 continue
@@ -168,7 +169,8 @@ class ImageProcessor:
             
             # Convert mm coordinates back to pixel coordinates for display
             pixel_points = []
-            for mm_x, mm_y in contour_points:
+            for point in contour_points:
+                mm_x, mm_y = point[0], point[1]  # Use only X,Y for display (ignore Z)
                 # Reverse the coordinate transformation
                 px_x = int((mm_x - ORIGIN_X) / DRAWING_AREA_WIDTH_MM * IMAGE_WIDTH_PX)
                 px_y = int(IMAGE_HEIGHT_PX - (mm_y - ORIGIN_Y) / DRAWING_AREA_HEIGHT_MM * IMAGE_HEIGHT_PX)
@@ -198,7 +200,7 @@ class ImageProcessor:
                 curr_end = contours[i][-1]
                 next_start = contours[i+1][0]
                 
-                # Convert to pixels
+                # Convert to pixels (use X,Y only)
                 curr_px = (int((curr_end[0] - ORIGIN_X) / DRAWING_AREA_WIDTH_MM * IMAGE_WIDTH_PX),
                           int(IMAGE_HEIGHT_PX - (curr_end[1] - ORIGIN_Y) / DRAWING_AREA_HEIGHT_MM * IMAGE_HEIGHT_PX))
                 next_px = (int((next_start[0] - ORIGIN_X) / DRAWING_AREA_WIDTH_MM * IMAGE_WIDTH_PX),
@@ -238,7 +240,7 @@ class ImageProcessor:
         # Start with largest contour
         current = remaining.pop(0)
         ordered.append(current)
-        last_point = current[-1][0] if len(current) > 0 else [0, 0]
+        last_point = current[-1][:2] if len(current) > 0 else [0, 0]  # Use X,Y only for distance calc
         
         while remaining:
             closest = None
@@ -246,8 +248,8 @@ class ImageProcessor:
             
             for contour in remaining:
                 if len(contour) > 0:
-                    first_point = contour[0][0]
-                    dist = np.linalg.norm(last_point - first_point)
+                    first_point = contour[0][:2]  # Use X,Y only for distance calc
+                    dist = np.linalg.norm(np.array(last_point) - np.array(first_point))
                     if dist < min_dist:
                         min_dist = dist
                         closest = contour
@@ -256,8 +258,49 @@ class ImageProcessor:
                 ordered.append(closest)
                 # Use list comprehension to safely remove the contour
                 remaining = [c for c in remaining if c is not closest]
-                last_point = closest[-1][0] if len(closest) > 0 else last_point
+                last_point = closest[-1][:2] if len(closest) > 0 else last_point  # Use X,Y only
             else:
                 break
         
         return ordered
+
+    def create_single_line_path(self, contours):
+        """Convert multiple contours into a single continuous path."""
+        if not contours:
+            return []
+        
+        print("Creating single continuous line path...")
+        
+        # Start with optimized path order
+        optimized_contours = self.optimize_contour_path(contours)
+        
+        # Connect all contours into one continuous path
+        single_path = []
+        
+        for i, contour_points in enumerate(optimized_contours):
+            if len(contour_points) < 1:
+                continue
+            
+            # Add all points from this contour
+            single_path.extend(contour_points)
+            
+            # Add connecting line to next contour (if there is one)
+            if i < len(optimized_contours) - 1 and len(optimized_contours[i + 1]) > 0:
+                current_end = contour_points[-1]
+                next_start = optimized_contours[i + 1][0]
+                
+                # Add intermediate points for smooth connection if distance is large
+                distance = np.sqrt((next_start[0] - current_end[0])**2 + (next_start[1] - current_end[1])**2)
+                
+                # Add connecting points if jump is > 10mm
+                if distance > 10:
+                    num_points = max(2, int(distance / 5))  # One point every 5mm
+                    for step in range(1, num_points):
+                        t = step / num_points
+                        interp_x = current_end[0] + t * (next_start[0] - current_end[0])
+                        interp_y = current_end[1] + t * (next_start[1] - current_end[1])
+                        interp_z = current_end[2]  # Keep same Z
+                        single_path.append((interp_x, interp_y, interp_z))
+        
+        print(f"✅ Single path created: {len(single_path)} points from {len(optimized_contours)} contours")
+        return [single_path]  # Return as single contour list

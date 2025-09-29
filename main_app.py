@@ -136,7 +136,8 @@ class DrawingApplication:
         cv2.imshow("Drawing Preview - Check path and order", preview_img)
         
         print("\nPreview Controls:")
-        print("  'd' = Start drawing")
+        print("  'd' = Start drawing (separate contours)")
+        print("  'l' = Draw as single continuous line") 
         print("  's' = Save preview image")
         print("  'e' = Export trajectory for PyBullet simulation")
         print("  'g' = Export G-code (.nc) file for MyCobot execution")
@@ -150,12 +151,12 @@ class DrawingApplication:
             preview_filename = "drawing_preview.jpg"
             cv2.imwrite(preview_filename, preview_img)
             print(f"Preview saved as {preview_filename}")
-            print("Press 'd' to draw, 'e' to export, or any other key to cancel:")
+            print("Press 'd' to draw, 'l' for single line, 'e' to export, or any other key to cancel:")
             key = cv2.waitKey(0)
             cv2.destroyAllWindows()
         elif key == ord('e'):
             self.handle_trajectory_export(contours)
-            print("Press 'd' to draw, 'g' to export G-code, or any other key to cancel:")
+            print("Press 'd' to draw, 'l' for single line, 'g' to export G-code, or any other key to cancel:")
             key = cv2.waitKey(0)
             cv2.destroyAllWindows()
         elif key == ord('g'):
@@ -172,7 +173,7 @@ class DrawingApplication:
                     except ValueError:
                         draw_speed = 50
                     self.gcode.execute_gcode_drawing(gcode_file, draw_speed)
-            print("Press 'd' to draw directly or any other key to cancel:")
+            print("Press 'd' to draw directly, 'l' for single line, or any other key to cancel:")
             key = cv2.waitKey(0)
             cv2.destroyAllWindows()
         elif key == ord('i'):
@@ -189,15 +190,26 @@ class DrawingApplication:
                     except ValueError:
                         draw_speed = 50
                     self.gcode.execute_inkscape_ngc(ngc_file, draw_speed)
-            print("Press 'd' to draw directly or any other key to cancel:")
+            print("Press 'd' to draw directly, 'l' for single line, or any other key to cancel:")
             key = cv2.waitKey(0)
             cv2.destroyAllWindows()
         
-        if key != ord('d'):
+        # Check for single line drawing mode
+        single_line_mode = (key == ord('l'))
+        
+        if key != ord('d') and key != ord('l'):
             print("Drawing cancelled.")
             return
         
-        print(f"Drawing {len(contours)} optimized contours...")
+        # Convert to single line if requested
+        if single_line_mode:
+            print("Converting to single continuous line...")
+            contours = self.image_processor.create_single_line_path(contours)
+        
+        if single_line_mode:
+            print(f"Drawing as single continuous line ({len(contours[0]) if contours else 0} points)...")
+        else:
+            print(f"Drawing {len(contours)} separate contours...")
         print("="*60)
         
         # Setup
@@ -216,13 +228,13 @@ class DrawingApplication:
                 self.print_progress_bar(i+1, len(contours), prefix="Drawing")
             
             # Start drawing this contour
-            start_x, start_y = contour_points[0]
+            start_x, start_y, start_z = contour_points[0]
             self.robot.gentle_pen_down(start_x, start_y)
             
             # Draw all segments in this contour
             for j in range(1, len(contour_points)):
-                prev_x, prev_y = contour_points[j-1]
-                next_x, next_y = contour_points[j]
+                prev_x, prev_y, prev_z = contour_points[j-1]
+                next_x, next_y, next_z = contour_points[j]
                 
                 # Use proper line segment drawing
                 self.robot.draw_line_segment((prev_x, prev_y), (next_x, next_y))

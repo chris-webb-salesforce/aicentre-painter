@@ -25,7 +25,7 @@ PEN_RETRACT_Z = ORIGIN_Z + 25    # Safe height above paper (reduced for faster m
 # --- Safety Settings ---
 # Critical safety parameters to prevent damage
 SAFE_TRAVEL_HEIGHT = ORIGIN_Z + 50  # Safe height for all position changes (50mm above table)
-MIN_SAFE_Z = ORIGIN_Z - 30          # Absolute minimum Z (10mm below table surface)
+MIN_SAFE_Z = ORIGIN_Z - 10          # Absolute minimum Z (10mm below table surface)
 MAX_SAFE_Z = ORIGIN_Z + 200         # Maximum safe Z height
 SAFETY_MARGIN = 5                   # Additional safety margin (mm)
 
