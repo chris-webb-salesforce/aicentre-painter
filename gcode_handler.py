@@ -558,11 +558,11 @@ class GCodeHandler:
                     f.write("G64\n")
                 
                 # Set initial feed rate
-                f.write(f"F{GCODE_RAPID_FEEDRATE} ; Set rapid feedrate\n")
+                f.write(f"F{GCODE_RAPID_FEEDRATE}\n")
                 
                 # Move to initial position
                 f.write(f"G0 X{ORIGIN_X:.{GCODE_DECIMAL_PLACES}f} Y{ORIGIN_Y:.{GCODE_DECIMAL_PLACES}f} Z{SAFE_TRAVEL_HEIGHT:.{GCODE_DECIMAL_PLACES}f}\n")
-                f.write(f"G4 P{GCODE_PAUSE_BEFORE_DRAW} ; Pause before starting\n")
+                f.write(f"G4 P{GCODE_PAUSE_BEFORE_DRAW}\n")
                 
                 # Process each optimized contour
                 for contour_data in processed_contours:
@@ -644,12 +644,12 @@ class GCodeHandler:
             with open(filename, 'w') as f:
                 
                 # Initialize with absolute positioning
-                f.write("G90  ; Absolute positioning\n")
-                f.write("G21  ; Units in millimeters\n")
+                f.write("G90\n")
+                f.write("G21\n")
                 
                 # Home position (will be adjusted by recorded home position)
-                f.write("G0 X0 Y0 Z0  ; Move to home position\n")
-                f.write("G4 P1000     ; Pause 1 second\n")
+                f.write("G0 X0 Y0 Z0\n")
+                f.write("G4 P1000\n")
                 
                 for contour_idx, contour_points in enumerate(contours):
                     if len(contour_points) < 2:

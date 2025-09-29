@@ -41,6 +41,15 @@ class RobotController:
         self.max_wait_time = MAX_WAIT_TIME
         self.position_tolerance = POSITION_TOLERANCE
         self.position_check_interval = POSITION_CHECK_INTERVAL
+        self.last_command_time = 0
+        self.min_command_interval = 0.05  # Minimum 50ms between commands
+        
+        # Enable fresh mode for real-time commands (reduces command skipping)
+        try:
+            self.mc.set_fresh_mode(1)
+            print("✅ Fresh mode enabled for real-time commands")
+        except Exception as e:
+            print(f"⚠️  Could not enable fresh mode: {e}")
         
         print("✅ Robot Controller initialized successfully")
 
@@ -187,51 +196,123 @@ class RobotController:
             # Brief stabilization pause
             time.sleep(0.02)
     
+    def wait_until_stopped(self, timeout=None):
+        """Wait until robot has completely stopped moving."""
+        if timeout is None:
+            timeout = self.max_wait_time
+        
+        start_time = time.time()
+        stable_readings = 0
+        required_stable_readings = 5  # Must be stable for 5 consecutive readings
+        last_position = None
+        
+        while time.time() - start_time < timeout:
+            try:
+                # Check if robot is in motion using built-in method
+                if hasattr(self.mc, 'is_in_position') and callable(self.mc.is_in_position):
+                    # Use native method if available
+                    in_position = self.mc.is_in_position()
+                    if in_position:
+                        stable_readings += 1
+                        if stable_readings >= required_stable_readings:
+                            return True
+                    else:
+                        stable_readings = 0
+                else:
+                    # Fallback: check position stability manually
+                    current_pos = self.mc.get_coords()
+                    if current_pos and len(current_pos) >= 3:
+                        if last_position:
+                            # Calculate movement between readings
+                            movement = np.sqrt(sum((current_pos[i] - last_position[i])**2 for i in range(3)))
+                            if movement < 0.1:  # Very small movement threshold
+                                stable_readings += 1
+                                if stable_readings >= required_stable_readings:
+                                    time.sleep(0.02)  # Final settling delay
+                                    return True
+                            else:
+                                stable_readings = 0
+                        last_position = current_pos[:]
+                
+                time.sleep(0.02)  # Fast polling
+                
+            except Exception as e:
+                print(f"⚠️  Motion detection error: {e}")
+                time.sleep(0.05)
+                break
+        
+        print(f"⚠️  Stop detection timeout after {timeout}s")
+        return False
+
     def wait_for_movement_completion(self, target_position, timeout=None):
         """Wait for robot to reach target position before proceeding."""
         if not self.use_movement_sync:
+            time.sleep(0.05)  # Minimum delay even without sync
             return True
         
         if timeout is None:
             timeout = self.max_wait_time
         
-        start_time = time.time()
-        consecutive_failures = 0
+        # First, wait until robot stops moving
+        stop_success = self.wait_until_stopped(timeout * 0.8)  # Use 80% of timeout
         
-        while time.time() - start_time < timeout:
-            try:
-                current_pos = self.mc.get_coords()
-                if current_pos and len(current_pos) >= 3 and len(target_position) >= 3:
-                    # Calculate distance to target (only check X, Y, Z)
-                    distance = np.sqrt(sum((current_pos[i] - target_position[i])**2 for i in range(3)))
-                    
-                    if distance <= self.position_tolerance:
-                        return True
-                    
-                    consecutive_failures = 0  # Reset failure counter
-                    time.sleep(self.position_check_interval)  # Fast checking
-                else:
-                    consecutive_failures += 1
-                    if consecutive_failures > 5:  # If get_coords fails repeatedly, give up early
-                        print("⚠️  Position checking failed - using fallback timing")
-                        time.sleep(0.1)  # Short fallback
-                        return True
-                    time.sleep(0.02)
-                    
-            except Exception:
-                consecutive_failures += 1
-                if consecutive_failures > 5:
-                    print("⚠️  Position checking error - using fallback timing") 
-                    time.sleep(0.1)  # Short fallback
+        if not stop_success:
+            print("⚠️  Robot may still be moving")
+            return False
+        
+        # Then verify we're at the target position
+        try:
+            current_pos = self.mc.get_coords()
+            if current_pos and len(current_pos) >= 3 and len(target_position) >= 3:
+                distance = np.sqrt(sum((current_pos[i] - target_position[i])**2 for i in range(3)))
+                if distance <= self.position_tolerance:
                     return True
-                time.sleep(0.02)
-                
-        print(f"⚠️  Movement timeout after {timeout}s - continuing anyway")
-        return False
+                else:
+                    print(f"⚠️  Position error: {distance:.2f}mm from target")
+                    return False
+        except Exception as e:
+            print(f"⚠️  Position check failed: {e}")
+            
+        return True  # Assume success if we can't verify
+    
+    def move_and_wait_stopped(self, coords, speed, mode=0, timeout=None):
+        """Move to position and wait until completely stopped."""
+        try:
+            # Enforce minimum command interval
+            current_time = time.time()
+            time_since_last = current_time - self.last_command_time
+            if time_since_last < self.min_command_interval:
+                time.sleep(self.min_command_interval - time_since_last)
+            
+            # Apply safety validation and compensation
+            safe_coords = coords.copy()
+            if len(safe_coords) >= 3:
+                safe_coords[2] = self.validate_z_coordinate(safe_coords[2])
+            compensated_coords = self.apply_z_compensation(safe_coords)
+            
+            # Send movement command
+            self.mc.send_coords(compensated_coords, speed, mode)
+            self.last_command_time = time.time()
+            
+            # Wait until completely stopped
+            if timeout is None:
+                timeout = self.max_wait_time
+            
+            return self.wait_until_stopped(timeout)
+            
+        except Exception as e:
+            print(f"❌ Move and wait failed: {e}")
+            return False
     
     def synchronized_move(self, coords, speed, mode=0, wait_for_completion=True):
         """Send movement command and optionally wait for completion."""
         try:
+            # Enforce minimum command interval to prevent overrun
+            current_time = time.time()
+            time_since_last = current_time - self.last_command_time
+            if time_since_last < self.min_command_interval:
+                time.sleep(self.min_command_interval - time_since_last)
+            
             # Apply safety validation to Z coordinate
             safe_coords = coords.copy()
             if len(safe_coords) >= 3:
@@ -240,6 +321,7 @@ class RobotController:
             # Apply distance-based Z compensation
             compensated_coords = self.apply_z_compensation(safe_coords)
             self.mc.send_coords(compensated_coords, speed, mode)
+            self.last_command_time = time.time()
             
             if wait_for_completion and self.use_movement_sync:
                 # For drawing movements, use shorter timeout 

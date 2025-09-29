@@ -32,7 +32,7 @@ SAFETY_MARGIN = 5                   # Additional safety margin (mm)
 # --- Movement Control Settings ---
 # Speed settings for different operations (STABILIZED FOR REDUCED WOBBLE)
 APPROACH_SPEED = 20  # Slower approach for better control
-DRAWING_SPEED = 25  # Reduced drawing speed to minimize wobble
+DRAWING_SPEED = 15  # Further reduced to prevent command skipping
 LIFT_SPEED = 30  # Controlled pen lifting
 TRAVEL_SPEED = 40  # Moderate travel to reduce vibration
 
