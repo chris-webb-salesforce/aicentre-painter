@@ -219,9 +219,10 @@ class ImageProcessor:
 
     def preprocess_contours(self, sketch_image):
         """Preprocess and filter contours for detailed drawing."""
-        # RETR_EXTERNAL gets only outer contours (reduces doubled lines)
-        # Use RETR_LIST if you want all contours including inner details
-        contours, _ = cv2.findContours(sketch_image, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        # RETR_LIST gets all contours (both outer and inner)
+        # This gives line-like effect instead of just outlines
+        # RETR_EXTERNAL would only get outer boundaries (outlines filled areas)
+        contours, _ = cv2.findContours(sketch_image, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
 
         # Pre-filter and convert all contours at once
         valid_contours = []
