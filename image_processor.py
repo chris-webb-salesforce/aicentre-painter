@@ -87,39 +87,39 @@ class ImageProcessor:
         return True
 
     def create_sketch(self):
-        """Convert captured image to sketch with single-line edge detection."""
+        """Convert captured image to pencil sketch."""
         print("Converting image to sketch...")
         img = cv2.imread(CAPTURED_IMAGE_PATH)
         if img is None:
             print("Error: Could not read captured image.")
             return None
 
-        # gray_image = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        # Original pencil sketch method (works better than Canny for portraits)
+        gray_image = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        inverted_image = 255 - gray_image
+        blurred_image = cv2.GaussianBlur(inverted_image, (21, 21), 0)
+        inverted_blurred_image = 255 - blurred_image
+        pencil_sketch = cv2.divide(gray_image, inverted_blurred_image, scale=256.0)
 
-        # Apply bilateral filter to preserve edges while reducing noise
-        # smoothed = cv2.bilateralFilter(gray_image, 9, 75, 75)
-
-        # Use Canny edge detection for clean single-pixel lines
-        # Lower threshold = more detail, higher = less detail
-        edges = cv2.Canny(img, 100, 200, apertureSize=5)  # Adjust: lower first value = more detail
-
-        # Morphological operations to clean up edges
-        kernel = cv2.getStructuringElement(cv2.MORPH_CROSS, (3, 3))
-
-        # Close small gaps
-        closed = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel, iterations=1)
-
-        # Thin to single-pixel lines using erosion
-        final_sketch = cv2.morphologyEx(closed, cv2.MORPH_ERODE, kernel, iterations=1)
+        # Adaptive threshold for clean contours
+        # Block size: smaller = more detail, larger = simpler
+        # 11 = DETAILED, 15 = MEDIUM, 21 = SIMPLE
+        final_sketch = cv2.adaptiveThreshold(
+            pencil_sketch, 255,
+            cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+            cv2.THRESH_BINARY_INV,
+            11, 2  # Change first value (11) for detail level
+        )
 
         cv2.imwrite(SKETCH_IMAGE_PATH, final_sketch)
         print(f"Sketch created and saved to {SKETCH_IMAGE_PATH}")
-        print(f"Tip: To adjust detail, change Canny thresholds (line 104): lower=more detail, higher=less")
         return final_sketch
 
     def preprocess_contours(self, sketch_image):
-        """OPTIMIZED: Preprocess and filter contours for faster drawing."""
-        contours, _ = cv2.findContours(sketch_image, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+        """Preprocess and filter contours for detailed drawing."""
+        # RETR_EXTERNAL gets only outer contours (reduces doubled lines)
+        # Use RETR_LIST if you want all contours including inner details
+        contours, _ = cv2.findContours(sketch_image, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         
         # Pre-filter and convert all contours at once
         valid_contours = []
