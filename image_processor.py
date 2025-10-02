@@ -101,7 +101,7 @@ class ImageProcessor:
 
         # Use Canny edge detection for clean single-pixel lines
         # Lower threshold = more detail, higher = less detail
-        edges = cv2.Canny(smoothed, 10, 100)  # Adjust: lower first value = more detail
+        edges = cv2.Canny(smoothed, 100, 200, apertureSize=3)  # Adjust: lower first value = more detail
 
         # Morphological operations to clean up edges
         kernel = cv2.getStructuringElement(cv2.MORPH_CROSS, (3, 3))
