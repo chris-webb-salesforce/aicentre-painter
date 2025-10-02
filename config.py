@@ -98,7 +98,7 @@ CONTOUR_SIMPLIFICATION_FACTOR = 0.003       # Less simplification for smoother l
 CONTOUR_SMOOTHING = 5                       # Smoothing strength: 2=light, 3=medium, 5=heavy, 0=off
 DUPLICATE_CONTOUR_THRESHOLD = 5.0           # Distance (mm) to detect duplicates: 3=strict, 5=loose, 0=off
 BREAK_CLOSED_CONTOURS = True                # Break blob outlines (prevents drawing around filled areas)
-CLOSED_CONTOUR_THRESHOLD = 10.0             # Distance (mm) to consider contour closed: 10=loose, 5=medium, 2=strict
+CLOSED_CONTOUR_THRESHOLD = 15.0             # Distance (mm) to consider contour closed: 10=loose, 5=medium, 2=strict
 
 # Path optimization
 OPTIMIZE_DRAWING_PATH = True                # Use nearest-neighbor ordering
