@@ -163,8 +163,11 @@ class ImageProcessor:
                     mm_points = []
                     for point in approx:
                         px_x, px_y = point[0]
+                        # Map pixel coordinates to mm coordinates
+                        # X: 0..IMAGE_WIDTH_PX → ORIGIN_X..ORIGIN_X+WIDTH
                         mm_x = ORIGIN_X + (px_x / IMAGE_WIDTH_PX) * DRAWING_AREA_WIDTH_MM
-                        mm_y = ORIGIN_Y + DRAWING_AREA_HEIGHT_MM - (px_y / IMAGE_HEIGHT_PX) * DRAWING_AREA_HEIGHT_MM
+                        # Y: 0..IMAGE_HEIGHT_PX → ORIGIN_Y+HEIGHT..ORIGIN_Y (inverted)
+                        mm_y = ORIGIN_Y + (1.0 - px_y / IMAGE_HEIGHT_PX) * DRAWING_AREA_HEIGHT_MM
                         mm_z = PEN_DRAWING_Z  # Explicitly set safe drawing height
                         mm_points.append((mm_x, mm_y, mm_z))
 
@@ -213,7 +216,7 @@ class ImageProcessor:
                 mm_x, mm_y = point[0], point[1]  # Use only X,Y for display (ignore Z)
                 # Reverse the coordinate transformation
                 px_x = int((mm_x - ORIGIN_X) / DRAWING_AREA_WIDTH_MM * IMAGE_WIDTH_PX)
-                px_y = int(IMAGE_HEIGHT_PX - (mm_y - ORIGIN_Y) / DRAWING_AREA_HEIGHT_MM * IMAGE_HEIGHT_PX)
+                px_y = int((1.0 - (mm_y - ORIGIN_Y) / DRAWING_AREA_HEIGHT_MM) * IMAGE_HEIGHT_PX)
                 # Clamp to image bounds
                 px_x = max(0, min(IMAGE_WIDTH_PX - 1, px_x))
                 px_y = max(0, min(IMAGE_HEIGHT_PX - 1, px_y))
@@ -242,9 +245,9 @@ class ImageProcessor:
                 
                 # Convert to pixels (use X,Y only)
                 curr_px = (int((curr_end[0] - ORIGIN_X) / DRAWING_AREA_WIDTH_MM * IMAGE_WIDTH_PX),
-                          int(IMAGE_HEIGHT_PX - (curr_end[1] - ORIGIN_Y) / DRAWING_AREA_HEIGHT_MM * IMAGE_HEIGHT_PX))
+                          int((1.0 - (curr_end[1] - ORIGIN_Y) / DRAWING_AREA_HEIGHT_MM) * IMAGE_HEIGHT_PX))
                 next_px = (int((next_start[0] - ORIGIN_X) / DRAWING_AREA_WIDTH_MM * IMAGE_WIDTH_PX),
-                          int(IMAGE_HEIGHT_PX - (next_start[1] - ORIGIN_Y) / DRAWING_AREA_HEIGHT_MM * IMAGE_HEIGHT_PX))
+                          int((1.0 - (next_start[1] - ORIGIN_Y) / DRAWING_AREA_HEIGHT_MM) * IMAGE_HEIGHT_PX))
                 
                 # Clamp coordinates
                 curr_px = (max(0, min(IMAGE_WIDTH_PX-1, curr_px[0])), max(0, min(IMAGE_HEIGHT_PX-1, curr_px[1])))
