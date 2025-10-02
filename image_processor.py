@@ -103,19 +103,18 @@ class ImageProcessor:
         # Lower threshold = more detail, higher = less detail
         edges = cv2.Canny(smoothed, 30, 100)  # Adjust: lower first value = more detail
 
-        # Thin edges to single-pixel width using morphological skeleton
-        # This prevents doubled lines
+        # Morphological operations to clean up edges
         kernel = cv2.getStructuringElement(cv2.MORPH_CROSS, (3, 3))
-        thinned = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel, iterations=1)
 
-        # Apply Zhang-Suen thinning for single-pixel skeleton
-        skeleton = cv2.ximgproc.thinning(thinned, thinningType=cv2.ximgproc.THINNING_ZHANGSUEN)
+        # Close small gaps
+        closed = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel, iterations=1)
 
-        final_sketch = skeleton
+        # Thin to single-pixel lines using erosion
+        final_sketch = cv2.morphologyEx(closed, cv2.MORPH_ERODE, kernel, iterations=1)
 
         cv2.imwrite(SKETCH_IMAGE_PATH, final_sketch)
         print(f"Sketch created and saved to {SKETCH_IMAGE_PATH}")
-        print(f"Tip: To adjust detail level, modify Canny thresholds in image_processor.py (line 104)")
+        print(f"Tip: To adjust detail, change Canny thresholds (line 104): lower=more detail, higher=less")
         return final_sketch
 
     def preprocess_contours(self, sketch_image):
