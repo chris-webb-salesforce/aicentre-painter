@@ -87,30 +87,31 @@ class ImageProcessor:
         return True
 
     def create_sketch(self):
-        """Convert captured image to line-based sketch using edge detection."""
+        """Convert captured image to pencil sketch."""
         print("Converting image to sketch...")
         img = cv2.imread(CAPTURED_IMAGE_PATH)
         if img is None:
             print("Error: Could not read captured image.")
             return None
 
+        # Original pencil sketch method
         gray_image = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        inverted_image = 255 - gray_image
+        blurred_image = cv2.GaussianBlur(inverted_image, (21, 21), 0)
+        inverted_blurred_image = 255 - blurred_image
+        pencil_sketch = cv2.divide(gray_image, inverted_blurred_image, scale=256.0)
 
-        # Apply bilateral filter to reduce noise while preserving edges
-        smoothed = cv2.bilateralFilter(gray_image, 9, 75, 75)
-
-        # Canny edge detection creates thin lines (not filled areas)
-        # Lower threshold = more detail, higher = less detail
-        # Try: (10, 50) = very detailed, (30, 100) = less detail
-        edges = cv2.Canny(smoothed, 20, 80)
-
-        # Invert so lines are white on black (standard for contour detection)
-        final_sketch = cv2.bitwise_not(edges)
+        # Adaptive threshold for clean contours
+        # Block size: smaller = more detail, larger = simpler
+        final_sketch = cv2.adaptiveThreshold(
+            pencil_sketch, 255,
+            cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+            cv2.THRESH_BINARY_INV,
+            15, 4  # Detail level: 11=detailed, 15=medium, 21=simple
+        )
 
         cv2.imwrite(SKETCH_IMAGE_PATH, final_sketch)
         print(f"Sketch created and saved to {SKETCH_IMAGE_PATH}")
-        print(f"Tip: Adjust Canny thresholds in image_processor.py line 104")
-        print(f"     Current: (20, 80) | More detail: (10, 50) | Less: (30, 100)")
         return final_sketch
 
     def is_contour_closed(self, points, threshold=2.0):
