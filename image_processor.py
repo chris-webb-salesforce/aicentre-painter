@@ -114,7 +114,7 @@ class ImageProcessor:
         print(f"Sketch created and saved to {SKETCH_IMAGE_PATH}")
         return final_sketch
 
-    def is_contour_closed(self, points, threshold=2.0):
+    def is_contour_closed(self, points, threshold=10.0):
         """Check if a contour is closed (start and end points are close)."""
         if len(points) < 3:
             return False
@@ -123,7 +123,7 @@ class ImageProcessor:
         end = points[-1]
 
         dist = np.sqrt((end[0] - start[0])**2 + (end[1] - start[1])**2)
-        return dist < threshold
+        return dist < threshold  # Increased from 2.0 to 10.0mm
 
     def break_closed_contour(self, points):
         """
@@ -135,8 +135,8 @@ class ImageProcessor:
             return points
 
         # Remove the last point if it's very close to the first
-        # (this is the closing segment)
-        if self.is_contour_closed(points, threshold=2.0):
+        # (this is the closing segment - typically blob outlines)
+        if self.is_contour_closed(points, threshold=CLOSED_CONTOUR_THRESHOLD):
             return points[:-1]
 
         return points
@@ -251,7 +251,7 @@ class ImageProcessor:
 
                     # Break closed contours to avoid drawing back over the same line
                     if BREAK_CLOSED_CONTOURS:
-                        if self.is_contour_closed(mm_points, threshold=2.0):
+                        if self.is_contour_closed(mm_points, threshold=CLOSED_CONTOUR_THRESHOLD):
                             closed_count += 1
                         mm_points = self.break_closed_contour(mm_points)
 
