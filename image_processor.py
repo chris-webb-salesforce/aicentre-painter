@@ -115,6 +115,33 @@ class ImageProcessor:
         print(f"Sketch created and saved to {SKETCH_IMAGE_PATH}")
         return final_sketch
 
+    def is_contour_closed(self, points, threshold=2.0):
+        """Check if a contour is closed (start and end points are close)."""
+        if len(points) < 3:
+            return False
+
+        start = points[0]
+        end = points[-1]
+
+        dist = np.sqrt((end[0] - start[0])**2 + (end[1] - start[1])**2)
+        return dist < threshold
+
+    def break_closed_contour(self, points):
+        """
+        For closed contours, find the best break point to avoid drawing
+        back over the same line.
+        Returns points without the closing segment.
+        """
+        if len(points) < 4:
+            return points
+
+        # Remove the last point if it's very close to the first
+        # (this is the closing segment)
+        if self.is_contour_closed(points, threshold=2.0):
+            return points[:-1]
+
+        return points
+
     def smooth_contour(self, points, smoothing_factor=3):
         """
         Smooth contour points using a moving average filter.
@@ -198,6 +225,7 @@ class ImageProcessor:
 
         # Pre-filter and convert all contours at once
         valid_contours = []
+        closed_count = 0
         for contour in contours:
             try:
                 area = cv2.contourArea(contour)
@@ -221,6 +249,12 @@ class ImageProcessor:
                         mm_z = PEN_DRAWING_Z  # Explicitly set safe drawing height
                         mm_points.append((mm_x, mm_y, mm_z))
 
+                    # Break closed contours to avoid drawing back over the same line
+                    if BREAK_CLOSED_CONTOURS:
+                        if self.is_contour_closed(mm_points, threshold=2.0):
+                            closed_count += 1
+                        mm_points = self.break_closed_contour(mm_points)
+
                     # Apply smoothing to reduce jaggedness
                     if CONTOUR_SMOOTHING > 0:
                         smoothed_points = self.smooth_contour(mm_points, smoothing_factor=CONTOUR_SMOOTHING)
@@ -241,6 +275,8 @@ class ImageProcessor:
             unique_contours = valid_contours
 
         print(f"Contours: {len(contours)} found → {len(valid_contours)} valid → {len(unique_contours)} unique")
+        if BREAK_CLOSED_CONTOURS and closed_count > 0:
+            print(f"  Broke {closed_count} closed contours to prevent backtracking")
 
         return [points for _, points in unique_contours]
 
