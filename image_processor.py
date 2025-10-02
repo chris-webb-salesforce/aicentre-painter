@@ -97,11 +97,11 @@ class ImageProcessor:
         gray_image = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
         # Apply bilateral filter to preserve edges while reducing noise
-        smoothed = cv2.bilateralFilter(gray_image, 9, 75, 75)
+        # smoothed = cv2.bilateralFilter(gray_image, 9, 75, 75)
 
         # Use Canny edge detection for clean single-pixel lines
         # Lower threshold = more detail, higher = less detail
-        edges = cv2.Canny(smoothed, 1, 200, apertureSize=3)  # Adjust: lower first value = more detail
+        edges = cv2.Canny(gray_image, 20, 100)  # Adjust: lower first value = more detail
 
         # Morphological operations to clean up edges
         kernel = cv2.getStructuringElement(cv2.MORPH_CROSS, (3, 3))
