@@ -87,26 +87,35 @@ class ImageProcessor:
         return True
 
     def create_sketch(self):
-        """Convert captured image to sketch."""
+        """Convert captured image to sketch with single-line edge detection."""
         print("Converting image to sketch...")
         img = cv2.imread(CAPTURED_IMAGE_PATH)
         if img is None:
             print("Error: Could not read captured image.")
             return None
-        
+
         gray_image = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        inverted_image = 255 - gray_image
-        blurred_image = cv2.GaussianBlur(inverted_image, (21, 21), 0)
-        inverted_blurred_image = 255 - blurred_image
-        pencil_sketch = cv2.divide(gray_image, inverted_blurred_image, scale=256.0)
-        
-        # Sketch detail level (comment/uncomment to switch):
-        # final_sketch = cv2.adaptiveThreshold(pencil_sketch, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 11, 2)  # DETAILED
-        final_sketch = cv2.adaptiveThreshold(pencil_sketch, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 15, 4)  # MEDIUM
-        # final_sketch = cv2.adaptiveThreshold(pencil_sketch, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 21, 6)  # SIMPLE
-        
+
+        # Apply bilateral filter to preserve edges while reducing noise
+        smoothed = cv2.bilateralFilter(gray_image, 9, 75, 75)
+
+        # Use Canny edge detection for clean single-pixel lines
+        # Lower threshold = more detail, higher = less detail
+        edges = cv2.Canny(smoothed, 30, 100)  # Adjust: lower first value = more detail
+
+        # Thin edges to single-pixel width using morphological skeleton
+        # This prevents doubled lines
+        kernel = cv2.getStructuringElement(cv2.MORPH_CROSS, (3, 3))
+        thinned = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel, iterations=1)
+
+        # Apply Zhang-Suen thinning for single-pixel skeleton
+        skeleton = cv2.ximgproc.thinning(thinned, thinningType=cv2.ximgproc.THINNING_ZHANGSUEN)
+
+        final_sketch = skeleton
+
         cv2.imwrite(SKETCH_IMAGE_PATH, final_sketch)
         print(f"Sketch created and saved to {SKETCH_IMAGE_PATH}")
+        print(f"Tip: To adjust detail level, modify Canny thresholds in image_processor.py (line 104)")
         return final_sketch
 
     def preprocess_contours(self, sketch_image):

@@ -68,8 +68,8 @@ IMAGE_WIDTH_PX = 400
 IMAGE_HEIGHT_PX = 600
 
 # Contour filtering
-MIN_CONTOUR_AREA = 50                       # Skip tiny details
-CONTOUR_SIMPLIFICATION_FACTOR = 0.01        # Minimal simplification
+MIN_CONTOUR_AREA = 20                       # Reduced to keep more detail (was 50)
+CONTOUR_SIMPLIFICATION_FACTOR = 0.003       # Even less simplification for smoother lines (was 0.01)
 
 # Path optimization
 OPTIMIZE_DRAWING_PATH = True                # Use nearest-neighbor ordering
