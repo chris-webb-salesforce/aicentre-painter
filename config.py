@@ -15,13 +15,14 @@ BAUD_RATE = 115200
 # DRAWING WORKSPACE
 # =============================================================================
 # The (X, Y, Z) coordinate of the origin of your drawing area
-ORIGIN_X = 200.0
+ORIGIN_X = 190.0  # Moved closer to robot base (was 200.0)
 ORIGIN_Y = 0.0
 ORIGIN_Z = 10.0
 
 # Drawing area dimensions (mm)
-DRAWING_AREA_WIDTH_MM = 120
-DRAWING_AREA_HEIGHT_MM = 120
+# Reduced to ensure all contours fit within robot's safe workspace
+DRAWING_AREA_WIDTH_MM = 100  # Was 120 - reduced to prevent overhang
+DRAWING_AREA_HEIGHT_MM = 100  # Was 120 - keeping square aspect ratio
 
 # =============================================================================
 # PEN HEIGHTS - FIXED (No compensation)
