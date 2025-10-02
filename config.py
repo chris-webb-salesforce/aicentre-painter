@@ -21,7 +21,7 @@ ORIGIN_Z = 10.0
 
 # Drawing area dimensions (mm)
 DRAWING_AREA_WIDTH_MM = 120
-DRAWING_AREA_HEIGHT_MM = 180
+DRAWING_AREA_HEIGHT_MM = 120
 
 # =============================================================================
 # PEN HEIGHTS - FIXED (No compensation)
@@ -88,4 +88,4 @@ CAMERA_INDEX = 0
 DRAWING_ORIENTATION = [180, 0, 45]
 
 # Desired J6 angle for pen holder
-DESIRED_J6_ANGLE = 45
+DESIRED_J6_ANGLE = 0
