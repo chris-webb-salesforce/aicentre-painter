@@ -115,12 +115,37 @@ class ImageProcessor:
         print(f"Sketch created and saved to {SKETCH_IMAGE_PATH}")
         return final_sketch
 
+    def smooth_contour(self, points, smoothing_factor=3):
+        """
+        Smooth contour points using a moving average filter.
+        Higher smoothing_factor = smoother curves (try 2-5).
+        """
+        if len(points) < smoothing_factor * 2:
+            return points
+
+        smoothed = []
+        half_window = smoothing_factor // 2
+
+        for i in range(len(points)):
+            # Get window of points around current point
+            start_idx = max(0, i - half_window)
+            end_idx = min(len(points), i + half_window + 1)
+
+            # Average X and Y coordinates
+            x_avg = sum(p[0] for p in points[start_idx:end_idx]) / (end_idx - start_idx)
+            y_avg = sum(p[1] for p in points[start_idx:end_idx]) / (end_idx - start_idx)
+            z = points[i][2]  # Keep original Z
+
+            smoothed.append((x_avg, y_avg, z))
+
+        return smoothed
+
     def preprocess_contours(self, sketch_image):
         """Preprocess and filter contours for detailed drawing."""
         # RETR_EXTERNAL gets only outer contours (reduces doubled lines)
         # Use RETR_LIST if you want all contours including inner details
         contours, _ = cv2.findContours(sketch_image, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        
+
         # Pre-filter and convert all contours at once
         valid_contours = []
         for contour in contours:
@@ -128,11 +153,11 @@ class ImageProcessor:
                 area = cv2.contourArea(contour)
                 if area < MIN_CONTOUR_AREA:  # Skip very small contours
                     continue
-                    
-                # Aggressive simplification for speed
+
+                # Simplification to reduce points while preserving shape
                 epsilon = CONTOUR_SIMPLIFICATION_FACTOR * cv2.arcLength(contour, True)
                 approx = cv2.approxPolyDP(contour, epsilon, True)
-                
+
                 if len(approx) >= 2:  # Need at least 2 points
                     # Pre-convert to mm coordinates with explicit Z coordinate
                     mm_points = []
@@ -142,10 +167,17 @@ class ImageProcessor:
                         mm_y = ORIGIN_Y + DRAWING_AREA_HEIGHT_MM - (px_y / IMAGE_HEIGHT_PX) * DRAWING_AREA_HEIGHT_MM
                         mm_z = PEN_DRAWING_Z  # Explicitly set safe drawing height
                         mm_points.append((mm_x, mm_y, mm_z))
-                    valid_contours.append((area, mm_points))
+
+                    # Apply smoothing to reduce jaggedness
+                    if CONTOUR_SMOOTHING > 0:
+                        smoothed_points = self.smooth_contour(mm_points, smoothing_factor=CONTOUR_SMOOTHING)
+                    else:
+                        smoothed_points = mm_points
+
+                    valid_contours.append((area, smoothed_points))
             except:
                 continue
-        
+
         # Sort by area (largest first) and extract points
         valid_contours.sort(key=lambda x: x[0], reverse=True)
         return [points for _, points in valid_contours]
