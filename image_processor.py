@@ -221,9 +221,9 @@ class ImageProcessor:
                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
         cv2.putText(preview_img, "• Black dots = start points", (10, legend_y + 45), 
                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
-        cv2.putText(preview_img, "• Arrows = travel paths", (10, legend_y + 65), 
+        cv2.putText(preview_img, "• Arrows = travel paths", (10, legend_y + 65),
                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
-        cv2.putText(preview_img, "Press 'd' to draw, 's' to save, 'g' for G-code, 'i' for NGC", (10, legend_y + 90), 
+        cv2.putText(preview_img, "Press 'd' to draw, 's' to save preview", (10, legend_y + 90),
                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 100, 0), 1)
         
         return preview_img

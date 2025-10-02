@@ -169,9 +169,9 @@ class WorkspaceManager:
         """Test the drawing area with gentle movements."""
         print("\n--- TESTING DRAWING AREA ---")
         print("This will draw a test rectangle to verify settings.")
-        
+
         self.robot.go_to_home_position()
-        
+
         # Define test rectangle (smaller than full area)
         margin = 20
         test_corners = [
@@ -181,22 +181,23 @@ class WorkspaceManager:
             (ORIGIN_X + margin, ORIGIN_Y + DRAWING_AREA_HEIGHT_MM - margin),
             (ORIGIN_X + margin, ORIGIN_Y + margin),  # Close the rectangle
         ]
-        
+
         # Move to start position
         print("Moving to start position...")
         start_x, start_y = test_corners[0]
-        self.robot.synchronized_move([start_x, start_y, PEN_RETRACT_Z] + DRAWING_ORIENTATION, TRAVEL_SPEED, 0)
-        
+        self.robot.move_to(start_x, start_y, PEN_RETRACT_Z, TRAVEL_SPEED)
+
         # Draw test rectangle
         print("Drawing test rectangle...")
-        self.robot.gentle_pen_down(start_x, start_y)
-        
+        self.robot.pen_down()
+
         for i in range(1, len(test_corners)):
             print(f"Drawing edge {i}/{len(test_corners)-1}...")
-            self.robot.draw_line_segment(test_corners[i-1], test_corners[i])
+            corner_x, corner_y = test_corners[i]
+            self.robot.draw_to(corner_x, corner_y)
             time.sleep(0.2)
-        
-        self.robot.gentle_pen_up()
+
+        self.robot.pen_up()
         print("Test complete!")
         self.robot.go_to_home_position()
 
@@ -275,17 +276,18 @@ class HomePositionManager:
             print("Using default home position instead...")
             self.robot.go_to_home_position()
             return False
-        
+
         try:
             print("Moving to recorded home position...")
-            
+
             # Move to recorded joint angles
             joint_angles = home_pos["joint_angles"]
-            self.robot.synchronized_angles(joint_angles, 30)
-            
+            self.robot.mc.send_angles(joint_angles, 30)
+            time.sleep(3)  # Wait for movement to complete
+
             print("✅ Moved to recorded home position")
             return True
-            
+
         except Exception as e:
             print(f"❌ Failed to move to recorded home position: {e}")
             print("Using default home position instead...")
@@ -297,46 +299,43 @@ class HomePositionManager:
         print("\n--- PEN PRESSURE CALIBRATION ---")
         print("This will help find the optimal pen pressure for your setup.")
         print("Place a test paper on the drawing surface.")
-        
+
         self.robot.go_to_home_position()
-        
+
         # Move to center of drawing area
         test_x = ORIGIN_X + DRAWING_AREA_WIDTH_MM / 2
-        test_z = ORIGIN_Z - DRAWING_AREA_HEIGHT_MM / 2
-        test_y = ORIGIN_Y
+        test_y = ORIGIN_Y + DRAWING_AREA_HEIGHT_MM / 2
+        test_z = ORIGIN_Z
         step_size = 0.5
-        
+
         print("Moving to test position...")
-        self.robot.synchronized_move([test_x, test_y, PEN_RETRACT_Z] + DRAWING_ORIENTATION, 30, 0)
-        time.sleep(3)
-        
-        print("\nUse keyboard to adjust pen pressure:")
-        print("  'f' = Move pen forward (more pressure)")
-        print("  'b' = Move pen backward (less pressure)")
-        print("  's' = Save this position")
+        self.robot.move_to(test_x, test_y, PEN_RETRACT_Z, 30)
+        time.sleep(1)
+
+        print("\nUse keyboard to adjust pen height (Z):")
+        print("  'd' = Move pen down (more pressure)")
+        print("  'u' = Move pen up (less pressure)")
+        print("  's' = Save this height")
         print("  'q' = Cancel calibration")
-        
+
         while True:
-            print(f"Current Y position: {test_y:.1f}mm")
-            self.robot.synchronized_move([test_x, test_y, test_z] + DRAWING_ORIENTATION, 15, 0)
-            time.sleep(0.5)
-            
+            print(f"Current Z position: {test_z:.1f}mm")
+            self.robot.move_to(test_x, test_y, test_z, 15)
+
             key = input("Command: ").lower().strip()
-            
-            if key == 'f':
-                test_y += step_size
-                print("Moving forward...")
-            elif key == 'b':
-                test_y -= step_size
-                print("Moving backward...")
+
+            if key == 'd':
+                test_z -= step_size
+                print("Moving down...")
+            elif key == 'u':
+                test_z += step_size
+                print("Moving up...")
             elif key == 's':
-                print(f"\nOptimal pressure Y position saved: {test_y:.1f}mm")
-                print("Update PEN_DRAWING_Y in your code to this value.")
-                self.robot.synchronized_move([test_x, test_y, PEN_RETRACT_Z] + DRAWING_ORIENTATION, 30, 0)
-                time.sleep(2)
-                return test_y
+                print(f"\nOptimal drawing Z position: {test_z:.1f}mm")
+                print(f"Update PEN_DRAWING_Z in config.py to: {test_z:.1f}")
+                self.robot.move_to(test_x, test_y, PEN_RETRACT_Z, 30)
+                return test_z
             elif key == 'q':
                 print("Calibration cancelled.")
-                self.robot.synchronized_move([test_x, test_y, PEN_RETRACT_Z] + DRAWING_ORIENTATION, 30, 0)
-                time.sleep(2)
+                self.robot.move_to(test_x, test_y, PEN_RETRACT_Z, 30)
                 return None
