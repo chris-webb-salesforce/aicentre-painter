@@ -39,27 +39,52 @@ MAX_SAFE_Z = ORIGIN_Z + 200             # Maximum safe Z height
 SAFETY_MARGIN = 5                       # Additional safety margin (mm)
 
 # =============================================================================
-# MOVEMENT SPEEDS - SLOW AND RELIABLE
+# MOVEMENT SPEEDS
 # =============================================================================
-TRAVEL_SPEED = 20       # Moving with pen up
-DRAWING_SPEED = 10      # Drawing lines
-APPROACH_SPEED = 15     # Lowering pen
-LIFT_SPEED = 20         # Raising pen
+# Increase speeds gradually to find your robot's sweet spot
+# Start conservative, then increase by 5 if drawings are reliable
+
+TRAVEL_SPEED = 30       # Moving with pen up (was 20)
+DRAWING_SPEED = 15      # Drawing lines (was 10 - increased for smoother movement)
+APPROACH_SPEED = 20     # Lowering pen (was 15)
+LIFT_SPEED = 25         # Raising pen (was 20)
 
 # =============================================================================
 # TIMING - CRITICAL FOR RELIABILITY
 # =============================================================================
-MIN_COMMAND_INTERVAL = 0.5          # Minimum time between commands (seconds)
-MOVEMENT_TIMEOUT = 5.0              # Max wait for movement completion
-POSITION_TOLERANCE = 3.0            # Position accuracy tolerance (mm)
+# Choose a preset by uncommenting one section:
+
+# --- PRESET 1: RELIABLE (Original - slow but guaranteed) ---
+# MIN_COMMAND_INTERVAL = 0.5
+# MOVEMENT_TIMEOUT = 5.0
+# POSITION_TOLERANCE = 3.0
+# MOVEMENT_SETTLING_TIME = 0.1
+
+# --- PRESET 2: BALANCED (Recommended - smooth and reliable) ---
+MIN_COMMAND_INTERVAL = 0.2          # Faster than reliable, still safe
+MOVEMENT_TIMEOUT = 3.0              # Shorter timeout
+POSITION_TOLERANCE = 5.0            # Slightly looser tolerance
+MOVEMENT_SETTLING_TIME = 0.05       # Quick settle
+
+# --- PRESET 3: SMOOTH (Fast and fluid - may skip on complex drawings) ---
+# MIN_COMMAND_INTERVAL = 0.1
+# MOVEMENT_TIMEOUT = 2.0
+# POSITION_TOLERANCE = 8.0
+# MOVEMENT_SETTLING_TIME = 0.02
+
+# --- PRESET 4: MAXIMUM SPEED (Experimental - use with caution) ---
+# MIN_COMMAND_INTERVAL = 0.05
+# MOVEMENT_TIMEOUT = 1.0
+# POSITION_TOLERANCE = 10.0
+# MOVEMENT_SETTLING_TIME = 0.01
+
 POSITION_CHECK_INTERVAL = 0.05      # How often to check position (seconds)
-MOVEMENT_SETTLING_TIME = 0.1        # Time to let arm settle
 
 # =============================================================================
 # MOVEMENT SYNCHRONIZATION - MUST BE TRUE
 # =============================================================================
 USE_MOVEMENT_SYNC = True            # Wait for each movement to complete
-MAX_WAIT_TIME = 5.0                 # Maximum wait time per move
+MAX_WAIT_TIME = 3.0                 # Maximum wait time per move
 
 # =============================================================================
 # IMAGE PROCESSING

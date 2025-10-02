@@ -48,13 +48,17 @@ class RobotController:
         """
         Wait until robot has completely stopped moving.
         This is THE critical function for reliability.
+
+        For smoother/faster movement, adjust these values:
+        - required_stable_readings: 3=strict, 2=balanced, 1=fast
+        - movement threshold: 0.2=strict, 0.5=loose, 1.0=very loose
         """
         if timeout is None:
             timeout = MOVEMENT_TIMEOUT
 
         start_time = time.time()
         stable_readings = 0
-        required_stable_readings = 3  # Must be stable for 3 consecutive readings
+        required_stable_readings = 2  # Reduced from 3 for smoother movement
         last_position = None
 
         while time.time() - start_time < timeout:
@@ -66,7 +70,7 @@ class RobotController:
                         # Calculate movement between readings
                         movement = np.sqrt(sum((current_pos[i] - last_position[i])**2 for i in range(3)))
 
-                        if movement < 0.2:  # Very small movement threshold
+                        if movement < 0.5:  # Looser threshold for smoother movement (was 0.2)
                             stable_readings += 1
                             if stable_readings >= required_stable_readings:
                                 time.sleep(MOVEMENT_SETTLING_TIME)  # Final settling
