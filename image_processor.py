@@ -108,7 +108,7 @@ class ImageProcessor:
             pencil_sketch, 255,
             cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
             cv2.THRESH_BINARY_INV,
-            11, 2  # Change first value (11) for detail level
+            15, 4  # Change first value (11) for detail level
         )
 
         cv2.imwrite(SKETCH_IMAGE_PATH, final_sketch)
