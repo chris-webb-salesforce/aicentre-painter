@@ -96,6 +96,7 @@ IMAGE_HEIGHT_PX = 600
 MIN_CONTOUR_AREA = 20                       # Reduced to keep more detail (was 50)
 CONTOUR_SIMPLIFICATION_FACTOR = 0.003       # Less simplification for smoother lines (was 0.01)
 CONTOUR_SMOOTHING = 5                       # Smoothing strength: 2=light, 3=medium, 5=heavy, 0=off
+DUPLICATE_CONTOUR_THRESHOLD = 3.0           # Distance (mm) to detect duplicates: 3=strict, 5=loose, 0=off
 
 # Path optimization
 OPTIMIZE_DRAWING_PATH = True                # Use nearest-neighbor ordering

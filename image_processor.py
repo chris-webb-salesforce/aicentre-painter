@@ -140,6 +140,56 @@ class ImageProcessor:
 
         return smoothed
 
+    def remove_duplicate_contours(self, contours, distance_threshold=5.0):
+        """
+        Remove duplicate/overlapping contours that are very close together.
+        This prevents drawing the same line twice.
+        """
+        if len(contours) < 2:
+            return contours
+
+        unique_contours = []
+        used = set()
+
+        for i, contour1 in enumerate(contours):
+            if i in used:
+                continue
+
+            is_duplicate = False
+            for j, contour2 in enumerate(unique_contours):
+                if self.contours_are_similar(contour1[1], contour2[1], distance_threshold):
+                    is_duplicate = True
+                    break
+
+            if not is_duplicate:
+                unique_contours.append(contour1)
+
+        return unique_contours
+
+    def contours_are_similar(self, points1, points2, threshold=5.0):
+        """Check if two contours are very similar (likely duplicates)."""
+        if abs(len(points1) - len(points2)) > 5:  # Very different point counts
+            return False
+
+        # Sample a few points and check if they're close
+        sample_size = min(5, len(points1), len(points2))
+        sample_indices = [int(i * len(points1) / sample_size) for i in range(sample_size)]
+
+        close_count = 0
+        for idx in sample_indices:
+            if idx >= len(points1) or idx >= len(points2):
+                continue
+
+            p1 = points1[min(idx, len(points1)-1)]
+            p2 = points2[min(idx, len(points2)-1)]
+
+            dist = np.sqrt((p1[0] - p2[0])**2 + (p1[1] - p2[1])**2)
+            if dist < threshold:
+                close_count += 1
+
+        # If most sampled points are close, contours are similar
+        return close_count >= sample_size * 0.7
+
     def preprocess_contours(self, sketch_image):
         """Preprocess and filter contours for detailed drawing."""
         # RETR_EXTERNAL gets only outer contours (reduces doubled lines)
@@ -181,9 +231,18 @@ class ImageProcessor:
             except:
                 continue
 
-        # Sort by area (largest first) and extract points
+        # Sort by area (largest first)
         valid_contours.sort(key=lambda x: x[0], reverse=True)
-        return [points for _, points in valid_contours]
+
+        # Remove duplicate/overlapping contours
+        if DUPLICATE_CONTOUR_THRESHOLD > 0:
+            unique_contours = self.remove_duplicate_contours(valid_contours, distance_threshold=DUPLICATE_CONTOUR_THRESHOLD)
+        else:
+            unique_contours = valid_contours
+
+        print(f"Contours: {len(contours)} found → {len(valid_contours)} valid → {len(unique_contours)} unique")
+
+        return [points for _, points in unique_contours]
 
     def create_contour_preview(self, contours):
         """Create a visual preview of the contours to be drawn."""
