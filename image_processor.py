@@ -96,8 +96,8 @@ class ImageProcessor:
             return self.create_sketch_local()
 
     def create_sketch_with_openai(self):
-        """Use OpenAI's DALL-E to generate a single-line sketch drawing."""
-        print("Generating single-line sketch using OpenAI...")
+        """Use OpenAI's GPT Image to generate a single-line sketch drawing."""
+        print("Generating single-line sketch using OpenAI GPT Image...")
 
         try:
             from openai import OpenAI
@@ -113,60 +113,46 @@ class ImageProcessor:
             print("Falling back to local sketch generation...")
             return self.create_sketch_local()
 
-        # Read and encode the captured image
-        with open(CAPTURED_IMAGE_PATH, 'rb') as image_file:
-            image_data = base64.b64encode(image_file.read()).decode('utf-8')
-
         try:
             client = OpenAI(api_key=api_key)
 
-            # Use GPT-4 Vision to analyze the image and generate a single-line drawing prompt
-            print("Analyzing image with GPT-4 Vision...")
-            response = client.chat.completions.create(
-                model="gpt-4o",
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": "Create a minimalist single continuous line portrait sketch of this person. The sketch should be simple, artistic, and recognizable with clean flowing lines. Black lines on white background only."
-                            },
-                            {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": f"data:image/jpeg;base64,{image_data}"
-                                }
-                            }
-                        ]
-                    }
-                ],
-                max_tokens=300
-            )
+            # Open the captured image as binary
+            with open(CAPTURED_IMAGE_PATH, 'rb') as image_file:
+                img_input = image_file
 
-            # Now generate the actual sketch image using DALL-E
-            print("Generating single-line sketch with DALL-E...")
-            image_response = client.images.generate(
-                model="dall-e-3",
-                prompt=f"A minimalist single continuous line drawing portrait sketch. Simple, clean, flowing black lines on pure white background. Artistic and recognizable. {response.choices[0].message.content}",
-                size="1024x1024",
-                quality="standard",
-                n=1,
-            )
+                # Use GPT Image Edit to transform the photo into a single-line sketch
+                # This preserves the likeness while converting to sketch style
+                print("Converting to single-line sketch with GPT Image...")
+                result = client.images.edit(
+                    model="gpt-image-1",
+                    image=img_input,
+                    prompt="Transform this portrait into a minimalist single continuous line drawing. Use only simple, clean, flowing black lines on a pure white background. The sketch should be artistic, recognizable, and look like a hand-drawn portrait with minimal detail. No shading, no filling, just clean line work.",
+                    size="1024x1024",
+                    output_format="png"
+                )
 
-            # Download the generated image
-            import requests
-            image_url = image_response.data[0].url
-            img_data = requests.get(image_url).content
+            # Decode the base64 image
+            image_base64 = result.data[0].b64_json
+            image_bytes = base64.b64decode(image_base64)
 
-            # Save to a temporary file
-            temp_path = "openai_sketch.png"
-            with open(temp_path, 'wb') as f:
-                f.write(img_data)
+            # Load and convert to the format we need
+            from PIL import Image
+            from io import BytesIO
 
-            # Load and convert to the format we need (binary sketch)
-            sketch_img = cv2.imread(temp_path)
-            gray = cv2.cvtColor(sketch_img, cv2.COLOR_BGR2GRAY)
+            sketch_img = Image.open(BytesIO(image_bytes))
+
+            # Convert PIL to OpenCV format
+            sketch_np = np.array(sketch_img)
+            if len(sketch_np.shape) == 3:
+                sketch_cv = cv2.cvtColor(sketch_np, cv2.COLOR_RGB2BGR)
+            else:
+                sketch_cv = sketch_np
+
+            # Convert to grayscale if needed
+            if len(sketch_cv.shape) == 3:
+                gray = cv2.cvtColor(sketch_cv, cv2.COLOR_BGR2GRAY)
+            else:
+                gray = sketch_cv
 
             # Resize to our target dimensions
             resized = cv2.resize(gray, (IMAGE_WIDTH_PX, IMAGE_HEIGHT_PX))
@@ -177,10 +163,6 @@ class ImageProcessor:
             # Save the final sketch
             cv2.imwrite(SKETCH_IMAGE_PATH, final_sketch)
             print(f"✅ OpenAI sketch created and saved to {SKETCH_IMAGE_PATH}")
-
-            # Clean up temp file
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
 
             return final_sketch
 
