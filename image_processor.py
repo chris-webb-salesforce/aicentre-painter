@@ -102,28 +102,29 @@ class ImageProcessor:
 
         # XDoG (eXtended Difference of Gaussians) for artistic sketch
         # This creates cleaner, more continuous lines
-        sigma1 = 0.5  # Smaller sigma for fine details
-        sigma2 = 2.0  # Larger sigma for broader structure
+        sigma1 = 0.5   # Smaller sigma for fine details
+        sigma2 = 3.0   # Larger sigma for broader structure
 
         # Apply two Gaussian blurs
         blur1 = cv2.GaussianBlur(denoised, (0, 0), sigma1)
         blur2 = cv2.GaussianBlur(denoised, (0, 0), sigma2)
 
-        # Difference of Gaussians
-        dog = blur1.astype(float) - blur2.astype(float)
+        # Difference of Gaussians (normalized)
+        dog = (blur1.astype(float) - blur2.astype(float))
 
-        # Apply soft threshold to create sketch lines
-        # Tau controls line darkness threshold, phi controls sharpness
-        tau = 0.98  # Higher = fewer lines (0.95-0.99 is good range)
-        phi = 200   # Sharpness multiplier
+        # Apply threshold to create sketch lines
+        # Lower tau = more lines, higher tau = fewer lines
+        tau = 3.0   # Threshold value (try 2-10)
+        phi = 10.0  # Sharpness multiplier
 
-        # XDoG formula
-        xdog = dog / 255.0
-        xdog = 1.0 + np.tanh(phi * (xdog - tau))
+        # XDoG formula with better parameters
+        xdog = dog.copy()
+        xdog[xdog >= tau] = 1.0
+        xdog[xdog < tau] = 1.0 + np.tanh(phi * (xdog[xdog < tau] - tau))
         xdog = (xdog * 255.0).clip(0, 255).astype(np.uint8)
 
-        # Invert to get black lines on white background
-        final_sketch = 255 - xdog
+        # Threshold to binary for cleaner lines
+        _, final_sketch = cv2.threshold(xdog, 250, 255, cv2.THRESH_BINARY_INV)
 
         # Optional: Apply light morphological operations to connect nearby lines
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2, 2))
