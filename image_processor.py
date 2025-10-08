@@ -106,21 +106,21 @@ class ImageProcessor:
 
         # Use Difference of Gaussians (DoG) for edge detection
         # This creates cleaner, more artistic lines than Canny
-        blur1 = cv2.GaussianBlur(simplified, (5, 5), 0)
-        blur2 = cv2.GaussianBlur(simplified, (15, 15), 0)
+        blur1 = cv2.GaussianBlur(simplified, (3, 3), 1)
+        blur2 = cv2.GaussianBlur(simplified, (7, 7), 2)
 
-        # Subtract to get edges
-        dog = cv2.subtract(blur2, blur1)
+        # Subtract to get edges (correct order: sharper - blurrier)
+        dog = cv2.absdiff(blur1, blur2)
 
-        # Enhance edges
-        dog = cv2.multiply(dog, 2.5)
-
-        # Invert so we have black lines on white
-        inverted = 255 - dog
+        # Enhance contrast
+        dog = cv2.multiply(dog, 3.0)
 
         # Threshold to get clean binary lines
         # Lower threshold = more lines, higher = fewer lines
-        _, final_sketch = cv2.threshold(inverted, 220, 255, cv2.THRESH_BINARY)
+        _, edges = cv2.threshold(dog, 30, 255, cv2.THRESH_BINARY)
+
+        # Invert so we have black lines on white background
+        final_sketch = 255 - edges
 
         cv2.imwrite(SKETCH_IMAGE_PATH, final_sketch)
         print(f"Sketch created and saved to {SKETCH_IMAGE_PATH}")
