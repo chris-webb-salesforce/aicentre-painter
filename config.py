@@ -90,7 +90,7 @@ MAX_WAIT_TIME = 3.0                 # Maximum wait time per move
 # IMAGE PROCESSING
 # =============================================================================
 IMAGE_WIDTH_PX = 400
-IMAGE_HEIGHT_PX = 600
+IMAGE_HEIGHT_PX = 400  # Match 1:1 aspect ratio of drawing area
 
 # Contour filtering
 MIN_CONTOUR_AREA = 20                       # Reduced to keep more detail (was 50)
