@@ -15,7 +15,7 @@ BAUD_RATE = 115200
 # DRAWING WORKSPACE
 # =============================================================================
 # The (X, Y, Z) coordinate of the origin of your drawing area
-ORIGIN_X = 190.0  # Moved closer to robot base (was 200.0)
+ORIGIN_X = 200.0  # Centered for 100mm drawing area within safe workspace
 ORIGIN_Y = 0.0
 ORIGIN_Z = 10.0
 
