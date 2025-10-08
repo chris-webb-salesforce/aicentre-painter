@@ -6,6 +6,8 @@ Handles camera capture, face detection, and image-to-sketch conversion.
 import cv2
 import numpy as np
 import time
+import os
+import base64
 from config import *
 
 
@@ -87,8 +89,109 @@ class ImageProcessor:
         return True
 
     def create_sketch(self):
-        """Convert captured image to simple sketch with clean lines."""
-        print("Converting image to sketch...")
+        """Convert captured image to sketch - uses OpenAI if enabled, otherwise local processing."""
+        if USE_OPENAI_SKETCH:
+            return self.create_sketch_with_openai()
+        else:
+            return self.create_sketch_local()
+
+    def create_sketch_with_openai(self):
+        """Use OpenAI's DALL-E to generate a single-line sketch drawing."""
+        print("Generating single-line sketch using OpenAI...")
+
+        try:
+            from openai import OpenAI
+        except ImportError:
+            print("Error: OpenAI package not installed. Run: pip install openai")
+            print("Falling back to local sketch generation...")
+            return self.create_sketch_local()
+
+        # Get API key from config or environment
+        api_key = OPENAI_API_KEY or os.getenv('OPENAI_API_KEY')
+        if not api_key:
+            print("Error: No OpenAI API key found. Set OPENAI_API_KEY in config.py or as environment variable.")
+            print("Falling back to local sketch generation...")
+            return self.create_sketch_local()
+
+        # Read and encode the captured image
+        with open(CAPTURED_IMAGE_PATH, 'rb') as image_file:
+            image_data = base64.b64encode(image_file.read()).decode('utf-8')
+
+        try:
+            client = OpenAI(api_key=api_key)
+
+            # Use GPT-4 Vision to analyze the image and generate a single-line drawing prompt
+            print("Analyzing image with GPT-4 Vision...")
+            response = client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "Create a minimalist single continuous line portrait sketch of this person. The sketch should be simple, artistic, and recognizable with clean flowing lines. Black lines on white background only."
+                            },
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/jpeg;base64,{image_data}"
+                                }
+                            }
+                        ]
+                    }
+                ],
+                max_tokens=300
+            )
+
+            # Now generate the actual sketch image using DALL-E
+            print("Generating single-line sketch with DALL-E...")
+            image_response = client.images.generate(
+                model="dall-e-3",
+                prompt=f"A minimalist single continuous line drawing portrait sketch. Simple, clean, flowing black lines on pure white background. Artistic and recognizable. {response.choices[0].message.content}",
+                size="1024x1024",
+                quality="standard",
+                n=1,
+            )
+
+            # Download the generated image
+            import requests
+            image_url = image_response.data[0].url
+            img_data = requests.get(image_url).content
+
+            # Save to a temporary file
+            temp_path = "openai_sketch.png"
+            with open(temp_path, 'wb') as f:
+                f.write(img_data)
+
+            # Load and convert to the format we need (binary sketch)
+            sketch_img = cv2.imread(temp_path)
+            gray = cv2.cvtColor(sketch_img, cv2.COLOR_BGR2GRAY)
+
+            # Resize to our target dimensions
+            resized = cv2.resize(gray, (IMAGE_WIDTH_PX, IMAGE_HEIGHT_PX))
+
+            # Threshold to pure black and white
+            _, final_sketch = cv2.threshold(resized, 127, 255, cv2.THRESH_BINARY)
+
+            # Save the final sketch
+            cv2.imwrite(SKETCH_IMAGE_PATH, final_sketch)
+            print(f"✅ OpenAI sketch created and saved to {SKETCH_IMAGE_PATH}")
+
+            # Clean up temp file
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+
+            return final_sketch
+
+        except Exception as e:
+            print(f"Error generating sketch with OpenAI: {e}")
+            print("Falling back to local sketch generation...")
+            return self.create_sketch_local()
+
+    def create_sketch_local(self):
+        """Convert captured image to simple sketch with clean lines (local processing)."""
+        print("Converting image to sketch (local processing)...")
         img = cv2.imread(CAPTURED_IMAGE_PATH)
         if img is None:
             print("Error: Could not read captured image.")
