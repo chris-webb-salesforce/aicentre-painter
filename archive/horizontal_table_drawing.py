@@ -1,0 +1,2024 @@
+import cv2
+import time
+from pymycobot import MyCobot320
+import numpy as np
+import sys
+import os
+import json
+import csv
+from datetime import datetime
+
+# --- Workspace Calibration for HORIZONTAL Drawing ---
+# The (X, Y, Z) coordinate of the top-left corner of your drawing area on flat table
+# These values are for table surface drawing
+ORIGIN_X = 200.0  # X position on table
+ORIGIN_Y = 0.0    # Y position on table  
+ORIGIN_Z = 100.0  # Height above table (adjust based on your table height)
+
+# Drawing area dimensions
+DRAWING_AREA_WIDTH_MM = 120
+DRAWING_AREA_HEIGHT_MM = 180
+
+# --- Pressure Control Settings ---
+# For flat table drawing, Z controls pen height (OPTIMIZED FOR STABILITY)
+PEN_CONTACT_Z = ORIGIN_Z - 1.5   # Light contact to test surface
+PEN_DRAWING_Z = ORIGIN_Z - 2.5   # Moderate drawing pressure (reduced to prevent digging)
+PEN_RETRACT_Z = ORIGIN_Z + 25    # Safe height above paper (reduced for faster movement)
+
+# --- Movement Control Settings ---
+# Speed settings for different operations (STABILIZED FOR REDUCED WOBBLE)
+APPROACH_SPEED = 20  # Slower approach for better control
+DRAWING_SPEED = 25  # Reduced drawing speed to minimize wobble
+LIFT_SPEED = 30  # Controlled pen lifting
+TRAVEL_SPEED = 40  # Moderate travel to reduce vibration
+
+# Movement interpolation settings (STABILIZED)
+INTERPOLATION_POINTS = 4  # More interpolation points for smoother curves
+MIN_SEGMENT_LENGTH = 3.0  # Smaller segments for better precision
+MOVEMENT_SETTLING_TIME = 0.05  # Time to let arm settle between movements
+
+# --- Force Protection and Depth Control Settings ---
+MAX_DRAWING_FORCE = 5  # Maximum force to apply (robot units)
+FORCE_CHECK_INTERVAL = 0.1  # How often to check force feedback
+Z_COMPENSATION_FACTOR = 0.995  # Very gradual Z compensation to prevent digging
+Z_STABILIZATION_THRESHOLD = 0.3  # Tighter threshold for Z-axis correction
+MAX_Z_DRIFT = 0.8  # Maximum allowed Z drift before correction
+
+# --- Robot Configuration ---
+SERIAL_PORT = "/dev/ttyAMA0"
+BAUD_RATE = 115200
+
+# --- Home Position Storage ---
+HOME_POSITION_FILE = "home_position.json"
+
+# --- Drawing Board Dimensions (based on their workflow) ---
+# They suggest 270x400mm drawing area in Inkscape
+INKSCAPE_DRAWING_WIDTH = 270  # mm
+INKSCAPE_DRAWING_HEIGHT = 400  # mm
+
+# --- Image Configuration ---
+IMAGE_WIDTH_PX = 400
+IMAGE_HEIGHT_PX = 600
+
+# --- Drawing Optimization (PERFORMANCE OPTIMIZED) ---
+# OLD VALUES (comment/uncomment to switch):
+# CONTOUR_SIMPLIFICATION_FACTOR = 0.02  # Higher simplification for fewer points
+# MIN_CONTOUR_AREA = 10  # Skip very small contours
+
+# MEDIUM SIMPLIFICATION (faster drawing, decent quality):
+CONTOUR_SIMPLIFICATION_FACTOR = 0.05  # More aggressive - fewer points
+MIN_CONTOUR_AREA = 25  # Skip more small details
+
+# FOR EVEN FASTER (uncomment these instead):
+# CONTOUR_SIMPLIFICATION_FACTOR = 0.1  # Very aggressive
+# MIN_CONTOUR_AREA = 50  # Skip most small details
+
+REST_INTERVAL = 0  # Disable rest intervals for continuous drawing
+REST_DURATION_S = 0
+OPTIMIZE_DRAWING_PATH = True
+BATCH_SIZE = 10  # Process contours in batches
+
+# --- File Paths ---
+CAPTURED_IMAGE_PATH = "captured_face.jpg"
+SKETCH_IMAGE_PATH = "sketch_to_draw.jpg"
+HAAR_CASCADE_PATH = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
+CAMERA_INDEX = 0
+
+class HorizontalTableDrawingRobot:
+    def __init__(self):
+        print("Initializing Horizontal Table Drawing Robot...")
+        try:
+            self.mc = MyCobot320(SERIAL_PORT, BAUD_RATE)
+            time.sleep(2)  # Give robot time to initialize
+            
+            # Enable adaptive mode for smoother movements
+            self.mc.set_fresh_mode(1)  # Enable coordinate refresh mode
+            
+        except Exception as e:
+            print(f"\\n--- ERROR ---")
+            print(f"Failed to connect to robot: {e}")
+            sys.exit(1)
+        
+        print("Loading face detection model...")
+        try:
+            self.face_cascade = cv2.CascadeClassifier(HAAR_CASCADE_PATH)
+            if self.face_cascade.empty():
+                print("Warning: Face cascade not loaded properly, continuing without face detection")
+                self.face_cascade = None
+            else:
+                print("Face detection model loaded successfully")
+        except Exception as e:
+            print(f"Warning: Could not load face detection model: {e}")
+            self.face_cascade = None
+        
+        # Orientation for flat table drawing with pen pointing straight down
+        # [RX, RY, RZ] - pen holder rotation controlled by J6 joint position
+        self.DRAWING_ORIENTATION = [180, 0, 45]
+        
+        # Track current pen state and depth
+        self.pen_is_down = False
+        self.current_position = None
+        self.current_z_depth = PEN_RETRACT_Z
+        self.movement_counter = 0
+        
+        
+        # Orientation for flat table drawing with pen pointing straight down
+        # [RX, RY, RZ] - pen holder rotation controlled by J6 joint position
+        self.DRAWING_ORIENTATION = [180, 0, 45]
+        
+        # Track current pen state
+        self.pen_is_down = False
+        self.current_position = None
+        
+        # Desired J6 angle for pen holder
+        self.DESIRED_J6_ANGLE = 45
+        
+        # Force feedback monitoring
+        self.last_force_check = time.time()
+        self.force_warnings = 0
+        
+        # Movement synchronization settings
+        self.use_movement_sync = True  # Enable proper movement waiting
+        self.max_wait_time = 3.0  # Maximum time to wait for movement completion
+        self.position_tolerance = 2.0  # mm tolerance for position checking (looser for speed)
+        self.position_check_interval = 0.02  # Check position every 20ms
+    
+    def check_force_feedback(self):
+        """Monitor force feedback and adjust Z if needed."""
+        current_time = time.time()
+        if current_time - self.last_force_check < FORCE_CHECK_INTERVAL:
+            return
+        
+        self.last_force_check = current_time
+        
+        # Note: Force feedback implementation depends on robot model capabilities
+        # This is a placeholder for force monitoring logic
+        try:
+            # In a real implementation, you would check robot force sensors here
+            # For now, we'll use position-based depth compensation
+            if self.pen_is_down and self.movement_counter > 75:
+                # After many movements, check for excessive drift
+                z_drift = PEN_DRAWING_Z - self.current_z_depth
+                if abs(z_drift) > Z_STABILIZATION_THRESHOLD:
+                    # Apply gentle correction
+                    correction = z_drift * 0.1  # 10% correction
+                    self.current_z_depth += correction
+                    # Clamp to safe range
+                    self.current_z_depth = max(PEN_DRAWING_Z - 0.8, 
+                                              min(PEN_DRAWING_Z + 0.4, self.current_z_depth))
+                    print(f"Force-based Z correction: {self.current_z_depth:.2f}mm (drift: {z_drift:.2f}mm)")
+        except Exception as e:
+            # Force feedback not available - continue with position control
+            pass
+    
+    def stabilize_arm_position(self):
+        """Add a brief pause to let arm stabilize and reduce oscillation."""
+        # Get current position to check if arm has settled
+        current = self.mc.get_coords()
+        if current:
+            # Brief stabilization pause
+            time.sleep(0.02)
+    
+    def wait_for_movement_completion(self, target_position, timeout=None):
+        """Wait for robot to reach target position before proceeding."""
+        if not self.use_movement_sync:
+            return True
+        
+        if timeout is None:
+            timeout = self.max_wait_time
+        
+        start_time = time.time()
+        consecutive_failures = 0
+        
+        while time.time() - start_time < timeout:
+            try:
+                current_pos = self.mc.get_coords()
+                if current_pos and len(current_pos) >= 3 and len(target_position) >= 3:
+                    # Calculate distance to target (only check X, Y, Z)
+                    distance = np.sqrt(sum((current_pos[i] - target_position[i])**2 for i in range(3)))
+                    
+                    if distance <= self.position_tolerance:
+                        return True
+                    
+                    consecutive_failures = 0  # Reset failure counter
+                    time.sleep(self.position_check_interval)  # Fast checking
+                else:
+                    consecutive_failures += 1
+                    if consecutive_failures > 5:  # If get_coords fails repeatedly, give up early
+                        print("⚠️  Position checking failed - using fallback timing")
+                        time.sleep(0.1)  # Short fallback
+                        return True
+                    time.sleep(0.02)
+                    
+            except Exception:
+                consecutive_failures += 1
+                if consecutive_failures > 5:
+                    print("⚠️  Position checking error - using fallback timing") 
+                    time.sleep(0.1)  # Short fallback
+                    return True
+                time.sleep(0.02)
+                
+        print(f"⚠️  Movement timeout after {timeout}s - continuing anyway")
+        return False
+    
+    def synchronized_move(self, coords, speed, mode=0, wait_for_completion=True):
+        """Send movement command and optionally wait for completion."""
+        try:
+            self.mc.send_coords(coords, speed, mode)
+            
+            if wait_for_completion and self.use_movement_sync:
+                # For drawing movements, use shorter timeout 
+                if speed >= DRAWING_SPEED:  # Drawing or faster movements
+                    timeout = min(1.5, self.max_wait_time)  # Max 1.5 seconds for drawing
+                else:
+                    timeout = self.max_wait_time  # Full timeout for positioning moves
+                
+                # Wait for movement to complete
+                success = self.wait_for_movement_completion(coords[:3], timeout)
+                return success
+            else:
+                # Use smart fallback timing if sync is disabled
+                movement_time = max(0.05, min(0.5, speed / 200.0))  # Faster estimates
+                time.sleep(movement_time)
+                return True
+                
+        except Exception as e:
+            print(f"❌ Movement command failed: {e}")
+            return False
+    
+    def synchronized_angles(self, angles, speed, wait_for_completion=True):
+        """Send angle command and optionally wait for completion.""" 
+        try:
+            self.mc.send_angles(angles, speed)
+            
+            if wait_for_completion and self.use_movement_sync:
+                # For angle movements, use time-based waiting since position checking is harder
+                movement_time = max(1.0, min(3.0, speed / 30.0))  # Faster, capped estimates
+                time.sleep(movement_time)
+                return True
+            else:
+                time.sleep(max(0.5, min(2.0, speed / 40.0)))  # Faster fallback
+                return True
+                
+        except Exception as e:
+            print(f"❌ Angle command failed: {e}")
+            return False
+        
+    def calibrate_pen_pressure(self):
+        """Interactive calibration to find optimal pen pressure."""
+        print("\\n--- PEN PRESSURE CALIBRATION ---")
+        print("This will help find the optimal pen pressure for your setup.")
+        print("Place a test paper on the vertical surface.")
+        
+        self.go_to_home_position()
+        
+        # Move to center of drawing area
+        test_x = ORIGIN_X + DRAWING_AREA_WIDTH_MM / 2
+        test_z = ORIGIN_Z - DRAWING_AREA_HEIGHT_MM / 2
+        
+        print("Moving to test position...")
+        self.mc.send_coords([test_x, test_y, PEN_RETRACT_Z] + self.DRAWING_ORIENTATION, 30, 0)
+        time.sleep(3)
+        
+        test_y = ORIGIN_Y
+        step_size = 0.5
+        
+        print("\\nUse keyboard to adjust pen pressure:")
+        print("  'f' = Move pen forward (more pressure)")
+        print("  'b' = Move pen backward (less pressure)")
+        print("  's' = Save this position")
+        print("  'q' = Cancel calibration")
+        
+        while True:
+            print(f"Current Y position: {test_y:.1f}mm")
+            self.mc.send_coords([test_x, test_y, test_z] + self.DRAWING_ORIENTATION, 15, 0)
+            time.sleep(0.5)
+            
+            key = input("Command: ").lower().strip()
+            
+            if key == 'f':
+                test_y += step_size
+                print("Moving forward...")
+            elif key == 'b':
+                test_y -= step_size
+                print("Moving backward...")
+            elif key == 's':
+                print(f"\\nOptimal pressure Y position saved: {test_y:.1f}mm")
+                print("Update PEN_DRAWING_Y in your code to this value.")
+                self.mc.send_coords([test_x, test_y, PEN_RETRACT_Z] + self.DRAWING_ORIENTATION, 30, 0)
+                time.sleep(2)
+                return test_y
+            elif key == 'q':
+                print("Calibration cancelled.")
+                self.mc.send_coords([test_x, test_y, PEN_RETRACT_Z] + self.DRAWING_ORIENTATION, 30, 0)
+                time.sleep(2)
+                return None
+                
+    def smooth_approach(self, target_coords, speed=APPROACH_SPEED):
+        """Gradually approach the target position to avoid sudden impacts."""
+        current = self.mc.get_coords()
+        if not current:
+            self.mc.send_coords(target_coords, speed, 0)
+            return
+        
+        # Create intermediate waypoints for smooth approach
+        steps = 3
+        for i in range(1, steps + 1):
+            ratio = i / steps
+            intermediate = [
+                current[0] + (target_coords[0] - current[0]) * ratio,
+                current[1] + (target_coords[1] - current[1]) * ratio,
+                current[2] + (target_coords[2] - current[2]) * ratio,
+            ] + target_coords[3:]
+            
+            self.mc.send_coords(intermediate, speed, 0)
+            time.sleep(0.1)
+    
+    def gentle_pen_down(self, x, y):
+        """Gently lower the pen to the drawing surface with smooth transition."""
+        if self.pen_is_down:
+            return
+            
+        # Move to position above the point
+        self.synchronized_move([x, y, PEN_RETRACT_Z] + self.DRAWING_ORIENTATION, TRAVEL_SPEED, 0)
+        
+        # Gradual approach to drawing surface in steps
+        approach_steps = 3
+        for i in range(1, approach_steps + 1):
+            z_position = PEN_RETRACT_Z - ((PEN_RETRACT_Z - PEN_DRAWING_Z) * (i / approach_steps))
+            self.synchronized_move([x, y, z_position] + self.DRAWING_ORIENTATION, int(APPROACH_SPEED // 2), 0)
+        
+        # Final positioning at drawing depth
+        self.synchronized_move([x, y, PEN_DRAWING_Z] + self.DRAWING_ORIENTATION, int(APPROACH_SPEED // 3), 0)
+        
+        self.pen_is_down = True
+        self.current_position = [x, y]
+        self.current_z_depth = PEN_DRAWING_Z
+        self.movement_counter = 0
+    
+    def gentle_pen_up(self):
+        """Gently lift the pen from the drawing surface with smooth transition."""
+        if not self.pen_is_down:
+            return
+            
+        current = self.mc.get_coords()
+        if current:
+            # Gradual lift in steps to prevent jerky movement
+            lift_steps = 2
+            for i in range(1, lift_steps + 1):
+                z_position = self.current_z_depth + ((PEN_RETRACT_Z - self.current_z_depth) * (i / lift_steps))
+                self.synchronized_move([current[0], current[1], z_position] + self.DRAWING_ORIENTATION, int(LIFT_SPEED // 2), 0)
+        
+        self.pen_is_down = False
+        self.current_z_depth = PEN_RETRACT_Z
+    
+    def draw_line_segment(self, from_point, to_point):
+        """Draw a line segment with smooth interpolation and depth control."""
+        x1, y1 = from_point
+        x2, y2 = to_point
+        
+        distance = np.sqrt((x2 - x1)**2 + (y2 - y1)**2)
+        
+        # Enhanced Z compensation to prevent digging deeper
+        self.movement_counter += 1
+        if self.movement_counter % 15 == 0:  # Every 15 movements (less frequent)
+            # Check if we've drifted too far down
+            z_drift = PEN_DRAWING_Z - self.current_z_depth
+            if z_drift > MAX_Z_DRIFT:
+                # Gradual correction back towards target depth
+                self.current_z_depth = (self.current_z_depth * Z_COMPENSATION_FACTOR + 
+                                       PEN_DRAWING_Z * (1 - Z_COMPENSATION_FACTOR))
+                # Clamp to safe range
+                self.current_z_depth = max(PEN_DRAWING_Z - 0.5, 
+                                          min(PEN_DRAWING_Z + 0.3, self.current_z_depth))
+        
+        if distance < MIN_SEGMENT_LENGTH:
+            # For short segments, single smooth movement
+            self.synchronized_move([x2, y2, self.current_z_depth] + self.DRAWING_ORIENTATION, DRAWING_SPEED, 0)
+        else:
+            # More interpolation points for smoother curves
+            num_points = max(2, min(INTERPOLATION_POINTS, int(distance / MIN_SEGMENT_LENGTH)))
+            for i in range(1, num_points + 1):
+                ratio = i / num_points
+                x = x1 + (x2 - x1) * ratio
+                y = y1 + (y2 - y1) * ratio
+                
+                # Smooth speed ramping for better control
+                if i == 1 or i == num_points:
+                    speed = int(DRAWING_SPEED * 0.8)  # Slower at segment endpoints
+                else:
+                    speed = DRAWING_SPEED
+                
+                # Synchronized movement with proper waiting
+                self.synchronized_move([x, y, self.current_z_depth] + self.DRAWING_ORIENTATION, speed, 0)
+                
+                # Check force feedback and stabilize periodically
+                if i % 2 == 0:  # Every other point
+                    self.check_force_feedback()
+                    self.stabilize_arm_position()
+        
+        self.current_position = [x2, y2]
+    
+    def go_to_home_position(self):
+        """Move to drawing start position (previously home)."""
+        print("Moving to drawing start position...")
+        self.gentle_pen_up()
+        # Position robot ready for drawing on flat table
+        initial_coords = [ORIGIN_X, ORIGIN_Y, PEN_RETRACT_Z] + self.DRAWING_ORIENTATION
+        self.synchronized_move(initial_coords, 40, 0)
+        # Pen holder angle set by Cartesian RZ=45
+    
+    def go_to_photo_position(self):
+        """Move to photo capture position."""
+        print("Moving to photo position...")
+        self.synchronized_angles([0, -45, -45, 0, 90, 0], 40)
+    
+    def go_to_safe_position(self):
+        """Move to neutral safe position when not drawing."""
+        print("Moving to safe neutral position...")
+        self.gentle_pen_up()
+        self.synchronized_angles([0, 0, 0, 0, 90, self.DESIRED_J6_ANGLE], 40)  # J6 at desired angle
+    
+    def test_coordinate_system(self):
+        """Test coordinate system and transformations."""
+        print("\n--- COORDINATE SYSTEM TEST ---")
+        
+        # Run coordinate transformation test
+        self.verify_coordinate_transformation()
+        
+        # Test a few sample points
+        print("\nTesting sample trajectory points:")
+        test_contours = [
+            [(ORIGIN_X + 10, ORIGIN_Y + 10), (ORIGIN_X + 30, ORIGIN_Y + 20)],  # Small line
+            [(ORIGIN_X + 50, ORIGIN_Y + 50), (ORIGIN_X + 70, ORIGIN_Y + 70)],  # Diagonal line
+        ]
+        
+        if self.validate_trajectory_points(test_contours):
+            print("✅ Coordinate system test passed")
+        else:
+            print("❌ Coordinate system test failed")
+        
+        # Show trajectory summary for test points
+        self.create_trajectory_summary(test_contours)
+    
+    def test_drawing_area(self):
+        """Test the drawing area with gentle movements."""
+        print("\\n--- TESTING DRAWING AREA ---")
+        print("This will draw a test rectangle to verify settings.")
+        
+        self.go_to_home_position()
+        
+        # Define test rectangle (smaller than full area)
+        margin = 20
+        test_corners = [
+            (ORIGIN_X + margin, ORIGIN_Y + margin),
+            (ORIGIN_X + DRAWING_AREA_WIDTH_MM - margin, ORIGIN_Y + margin),
+            (ORIGIN_X + DRAWING_AREA_WIDTH_MM - margin, ORIGIN_Y + DRAWING_AREA_HEIGHT_MM - margin),
+            (ORIGIN_X + margin, ORIGIN_Y + DRAWING_AREA_HEIGHT_MM - margin),
+            (ORIGIN_X + margin, ORIGIN_Y + margin),  # Close the rectangle
+        ]
+        
+        # Move to start position
+        print("Moving to start position...")
+        start_x, start_y = test_corners[0]
+        self.synchronized_move([start_x, start_y, PEN_RETRACT_Z] + self.DRAWING_ORIENTATION, TRAVEL_SPEED, 0)
+        
+        # Draw test rectangle
+        print("Drawing test rectangle...")
+        self.gentle_pen_down(start_x, start_y)
+        
+        for i in range(1, len(test_corners)):
+            x, y = test_corners[i]
+            print(f"Drawing edge {i}/{len(test_corners)-1}...")
+            self.draw_line_segment(test_corners[i-1], test_corners[i])
+            time.sleep(0.2)
+        
+        self.gentle_pen_up()
+        print("Test complete!")
+        self.go_to_home_position()
+    
+    def capture_image(self):
+        """Capture face image from camera."""
+        print("Preparing camera...")
+        cap = cv2.VideoCapture(CAMERA_INDEX)
+        if not cap.isOpened():
+            print(f"Error: Cannot open camera at index {CAMERA_INDEX}")
+            return False
+        
+        last_face_coords = None
+        
+        while True:
+            ret, frame = cap.read()
+            frame = cv2.rotate(frame, cv2.ROTATE_180)
+            if not ret:
+                print("Error: Failed to grab frame.")
+                break
+            
+            preview_frame = frame.copy()
+            gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            faces = self.face_cascade.detectMultiScale(gray_frame, 1.3, 5)
+            
+            if len(faces) > 0:
+                (x, y, w, h) = faces[0]
+                last_face_coords = (x, y, w, h)
+                cv2.rectangle(preview_frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
+            else:
+                last_face_coords = None
+            
+            cv2.imshow('Camera - Press "c" to capture, "q" to quit', preview_frame)
+            
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord('c'):
+                if last_face_coords:
+                    (x, y, w, h) = last_face_coords
+                    padding = 30
+                    face_roi = frame[max(0, y-padding):min(frame.shape[0], y+h+padding),
+                                     max(0, x-padding):min(frame.shape[1], x+w+padding)]
+                    
+                    resized_face = cv2.resize(face_roi, (IMAGE_WIDTH_PX, IMAGE_HEIGHT_PX))
+                    cv2.imwrite(CAPTURED_IMAGE_PATH, resized_face)
+                    print(f"Face captured and saved to {CAPTURED_IMAGE_PATH}")
+                    break
+                else:
+                    print("No face detected! Please try again.")
+            elif key == ord('q'):
+                print("Quitting capture.")
+                cap.release()
+                cv2.destroyAllWindows()
+                return False
+        
+        cap.release()
+        cv2.destroyAllWindows()
+        return True
+    
+    def create_sketch(self):
+        """Convert captured image to sketch."""
+        print("Converting image to sketch...")
+        img = cv2.imread(CAPTURED_IMAGE_PATH)
+        if img is None:
+            print("Error: Could not read captured image.")
+            return None
+        
+        gray_image = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        inverted_image = 255 - gray_image
+        blurred_image = cv2.GaussianBlur(inverted_image, (21, 21), 0)
+        inverted_blurred_image = 255 - blurred_image
+        pencil_sketch = cv2.divide(gray_image, inverted_blurred_image, scale=256.0)
+        
+        # Sketch detail level (comment/uncomment to switch):
+        # final_sketch = cv2.adaptiveThreshold(pencil_sketch, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 11, 2)  # DETAILED
+        final_sketch = cv2.adaptiveThreshold(pencil_sketch, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 15, 4)  # MEDIUM
+        # final_sketch = cv2.adaptiveThreshold(pencil_sketch, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 21, 6)  # SIMPLE
+        
+        cv2.imwrite(SKETCH_IMAGE_PATH, final_sketch)
+        print(f"Sketch created and saved to {SKETCH_IMAGE_PATH}")
+        return final_sketch
+    
+    def print_progress_bar(self, current, total, bar_length=50, prefix="Progress"):
+        """Print a progress bar to the terminal."""
+        if total == 0:
+            return
+        
+        progress = current / total
+        filled_length = int(bar_length * progress)
+        bar = '█' * filled_length + '░' * (bar_length - filled_length)
+        percent = progress * 100
+        
+        # Print with carriage return to update same line
+        print(f'\r{prefix}: |{bar}| {percent:.1f}% ({current}/{total})', end='', flush=True)
+        
+        # Print newline when complete
+        if current >= total:
+            print()
+    
+    def optimize_contour_path(self, contours):
+        """Optimize drawing order to minimize travel."""
+        if not contours:
+            return []
+        
+        print("Optimizing drawing path...")
+        remaining = list(contours)
+        ordered = []
+        
+        # Start with largest contour
+        current = remaining.pop(0)
+        ordered.append(current)
+        last_point = current[-1][0] if len(current) > 0 else [0, 0]
+        
+        while remaining:
+            closest = None
+            min_dist = float('inf')
+            
+            for contour in remaining:
+                if len(contour) > 0:
+                    first_point = contour[0][0]
+                    dist = np.linalg.norm(last_point - first_point)
+                    if dist < min_dist:
+                        min_dist = dist
+                        closest = contour
+            
+            if closest is not None:
+                ordered.append(closest)
+                # Use list comprehension to safely remove the contour
+                remaining = [c for c in remaining if c is not closest]
+                last_point = closest[-1][0] if len(closest) > 0 else last_point
+            else:
+                break
+        
+        return ordered
+    
+    def preprocess_contours(self, sketch_image):
+        """OPTIMIZED: Preprocess and filter contours for faster drawing."""
+        contours, _ = cv2.findContours(sketch_image, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+        
+        # Pre-filter and convert all contours at once
+        valid_contours = []
+        for contour in contours:
+            try:
+                area = cv2.contourArea(contour)
+                if area < MIN_CONTOUR_AREA:  # Skip very small contours
+                    continue
+                    
+                # Aggressive simplification for speed
+                epsilon = CONTOUR_SIMPLIFICATION_FACTOR * cv2.arcLength(contour, True)
+                approx = cv2.approxPolyDP(contour, epsilon, True)
+                
+                if len(approx) >= 2:  # Need at least 2 points
+                    # Pre-convert to mm coordinates
+                    mm_points = []
+                    for point in approx:
+                        px_x, px_y = point[0]
+                        mm_x = ORIGIN_X + (px_x / IMAGE_WIDTH_PX) * DRAWING_AREA_WIDTH_MM
+                        mm_y = ORIGIN_Y + DRAWING_AREA_HEIGHT_MM - (px_y / IMAGE_HEIGHT_PX) * DRAWING_AREA_HEIGHT_MM
+                        mm_points.append((mm_x, mm_y))
+                    valid_contours.append((area, mm_points))
+            except:
+                continue
+        
+        # Sort by area (largest first) and extract points
+        valid_contours.sort(key=lambda x: x[0], reverse=True)
+        return [points for _, points in valid_contours]
+
+    def create_contour_preview(self, contours):
+        """Create a visual preview of the contours to be drawn."""
+        # Create a blank white image for preview
+        preview_img = np.ones((IMAGE_HEIGHT_PX, IMAGE_WIDTH_PX, 3), dtype=np.uint8) * 255
+        
+        # Draw each contour in a different color
+        colors = [
+            (0, 0, 255),    # Red
+            (0, 255, 0),    # Green  
+            (255, 0, 0),    # Blue
+            (0, 255, 255),  # Yellow
+            (255, 0, 255),  # Magenta
+            (255, 255, 0),  # Cyan
+            (128, 0, 128),  # Purple
+            (255, 165, 0),  # Orange
+        ]
+        
+        print(f"Creating preview for {len(contours)} contours...")
+        
+        for i, contour_points in enumerate(contours):
+            if len(contour_points) < 2:
+                continue
+                
+            color = colors[i % len(colors)]
+            
+            # Convert mm coordinates back to pixel coordinates for display
+            pixel_points = []
+            for mm_x, mm_y in contour_points:
+                # Reverse the coordinate transformation
+                px_x = int((mm_x - ORIGIN_X) / DRAWING_AREA_WIDTH_MM * IMAGE_WIDTH_PX)
+                px_y = int(IMAGE_HEIGHT_PX - (mm_y - ORIGIN_Y) / DRAWING_AREA_HEIGHT_MM * IMAGE_HEIGHT_PX)
+                # Clamp to image bounds
+                px_x = max(0, min(IMAGE_WIDTH_PX - 1, px_x))
+                px_y = max(0, min(IMAGE_HEIGHT_PX - 1, px_y))
+                pixel_points.append((px_x, px_y))
+            
+            # Draw the contour as connected lines
+            if len(pixel_points) >= 2:
+                for j in range(1, len(pixel_points)):
+                    cv2.line(preview_img, pixel_points[j-1], pixel_points[j], color, 2)
+                
+                # Draw start point as a circle
+                cv2.circle(preview_img, pixel_points[0], 4, (0, 0, 0), -1)
+                
+                # Add contour number
+                text_pos = pixel_points[0]
+                cv2.putText(preview_img, str(i+1), (text_pos[0]+10, text_pos[1]-10), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
+        
+        # Add drawing order arrows for first few contours
+        arrow_color = (50, 50, 50)
+        for i in range(min(5, len(contours)-1)):
+            if len(contours[i]) >= 2 and len(contours[i+1]) >= 2:
+                # Get end of current contour and start of next
+                curr_end = contours[i][-1]
+                next_start = contours[i+1][0]
+                
+                # Convert to pixels
+                curr_px = (int((curr_end[0] - ORIGIN_X) / DRAWING_AREA_WIDTH_MM * IMAGE_WIDTH_PX),
+                          int(IMAGE_HEIGHT_PX - (curr_end[1] - ORIGIN_Y) / DRAWING_AREA_HEIGHT_MM * IMAGE_HEIGHT_PX))
+                next_px = (int((next_start[0] - ORIGIN_X) / DRAWING_AREA_WIDTH_MM * IMAGE_WIDTH_PX),
+                          int(IMAGE_HEIGHT_PX - (next_start[1] - ORIGIN_Y) / DRAWING_AREA_HEIGHT_MM * IMAGE_HEIGHT_PX))
+                
+                # Clamp coordinates
+                curr_px = (max(0, min(IMAGE_WIDTH_PX-1, curr_px[0])), max(0, min(IMAGE_HEIGHT_PX-1, curr_px[1])))
+                next_px = (max(0, min(IMAGE_WIDTH_PX-1, next_px[0])), max(0, min(IMAGE_HEIGHT_PX-1, next_px[1])))
+                
+                # Draw dashed line to show travel path
+                cv2.arrowedLine(preview_img, curr_px, next_px, arrow_color, 1, tipLength=0.3)
+        
+        # Add legend
+        legend_y = 30
+        cv2.putText(preview_img, "Drawing Preview:", (10, legend_y), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2)
+        cv2.putText(preview_img, f"• {len(contours)} contours", (10, legend_y + 25), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
+        cv2.putText(preview_img, "• Black dots = start points", (10, legend_y + 45), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
+        cv2.putText(preview_img, "• Arrows = travel paths", (10, legend_y + 65), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
+        cv2.putText(preview_img, "Press 'd' to draw, 's' to save, 'g' for G-code, 'i' for NGC", (10, legend_y + 90), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 100, 0), 1)
+        
+        return preview_img
+
+    def validate_trajectory_points(self, contours):
+        """Validate that all trajectory points are within safe bounds."""
+        print("\n--- TRAJECTORY VALIDATION ---")
+        
+        total_points = 0
+        out_of_bounds = 0
+        min_x, max_x = float('inf'), float('-inf')
+        min_y, max_y = float('inf'), float('-inf')
+        
+        # Define safe workspace bounds (with safety margins)
+        workspace_min_x = ORIGIN_X - 10  # 10mm safety margin
+        workspace_max_x = ORIGIN_X + DRAWING_AREA_WIDTH_MM + 10
+        workspace_min_y = ORIGIN_Y - 10
+        workspace_max_y = ORIGIN_Y + DRAWING_AREA_HEIGHT_MM + 10
+        
+        for i, contour_points in enumerate(contours):
+            for j, (x, y) in enumerate(contour_points):
+                total_points += 1
+                
+                # Track actual bounds
+                min_x, max_x = min(min_x, x), max(max_x, x)
+                min_y, max_y = min(min_y, y), max(max_y, y)
+                
+                # Check if point is out of bounds
+                if (x < workspace_min_x or x > workspace_max_x or 
+                    y < workspace_min_y or y > workspace_max_y):
+                    out_of_bounds += 1
+                    print(f"⚠️  Out of bounds: Contour {i+1}, Point {j+1}: ({x:.2f}, {y:.2f})")
+        
+        print(f"✓ Total trajectory points: {total_points}")
+        print(f"✓ Actual bounds: X=[{min_x:.1f}, {max_x:.1f}] Y=[{min_y:.1f}, {max_y:.1f}]")
+        print(f"✓ Safe workspace: X=[{workspace_min_x:.1f}, {workspace_max_x:.1f}] Y=[{workspace_min_y:.1f}, {workspace_max_y:.1f}]")
+        
+        if out_of_bounds > 0:
+            print(f"❌ WARNING: {out_of_bounds} points out of bounds!")
+            return False
+        else:
+            print("✅ All points within safe workspace bounds")
+            return True
+
+    def verify_coordinate_transformation(self):
+        """Verify pixel to mm coordinate transformation is correct."""
+        print("\n--- COORDINATE TRANSFORMATION TEST ---")
+        
+        # Test corner points
+        test_points_px = [
+            (0, 0),  # Top-left pixel
+            (IMAGE_WIDTH_PX-1, 0),  # Top-right pixel
+            (IMAGE_WIDTH_PX-1, IMAGE_HEIGHT_PX-1),  # Bottom-right pixel
+            (0, IMAGE_HEIGHT_PX-1),  # Bottom-left pixel
+            (IMAGE_WIDTH_PX//2, IMAGE_HEIGHT_PX//2),  # Center pixel
+        ]
+        
+        print("Pixel → MM → Pixel conversion test:")
+        print("Original Pixel → MM Coords → Back to Pixel")
+        
+        for px_x, px_y in test_points_px:
+            # Convert pixel to mm (same as in preprocess_contours)
+            mm_x = ORIGIN_X + (px_x / IMAGE_WIDTH_PX) * DRAWING_AREA_WIDTH_MM
+            mm_y = ORIGIN_Y + DRAWING_AREA_HEIGHT_MM - (px_y / IMAGE_HEIGHT_PX) * DRAWING_AREA_HEIGHT_MM
+            
+            # Convert back to pixel (same as in create_contour_preview)
+            back_px_x = int((mm_x - ORIGIN_X) / DRAWING_AREA_WIDTH_MM * IMAGE_WIDTH_PX)
+            back_px_y = int(IMAGE_HEIGHT_PX - (mm_y - ORIGIN_Y) / DRAWING_AREA_HEIGHT_MM * IMAGE_HEIGHT_PX)
+            
+            error_x = abs(px_x - back_px_x)
+            error_y = abs(px_y - back_px_y)
+            
+            print(f"({px_x:3d}, {px_y:3d}) → ({mm_x:6.1f}, {mm_y:6.1f}) → ({back_px_x:3d}, {back_px_y:3d}) [Error: {error_x}, {error_y}]")
+        
+        # Test physical workspace corners
+        print("\nPhysical workspace corners (MM coordinates):")
+        corners_mm = [
+            (ORIGIN_X, ORIGIN_Y),  # Origin
+            (ORIGIN_X + DRAWING_AREA_WIDTH_MM, ORIGIN_Y),  # Top-right
+            (ORIGIN_X + DRAWING_AREA_WIDTH_MM, ORIGIN_Y + DRAWING_AREA_HEIGHT_MM),  # Bottom-right  
+            (ORIGIN_X, ORIGIN_Y + DRAWING_AREA_HEIGHT_MM),  # Bottom-left
+        ]
+        
+        for i, (mm_x, mm_y) in enumerate(corners_mm):
+            print(f"Corner {i+1}: ({mm_x:6.1f}, {mm_y:6.1f}) mm")
+
+    def debug_trajectory_segment(self, from_point, to_point, segment_id):
+        """Debug output for individual trajectory segments."""
+        x1, y1 = from_point
+        x2, y2 = to_point
+        distance = np.sqrt((x2 - x1)**2 + (y2 - y1)**2)
+        
+        print(f"Segment {segment_id}: ({x1:.2f}, {y1:.2f}) → ({x2:.2f}, {y2:.2f}) [Dist: {distance:.2f}mm]")
+        
+        # Check for excessive jumps
+        if distance > 50:  # More than 50mm jump
+            print(f"  ⚠️  Large jump detected: {distance:.2f}mm")
+        
+        # Check Z bounds
+        z_coords = [PEN_RETRACT_Z, PEN_DRAWING_Z, self.current_z_depth]
+        for z_name, z_val in zip(["RETRACT", "DRAWING", "CURRENT"], z_coords):
+            if z_val < ORIGIN_Z - 10 or z_val > ORIGIN_Z + 50:
+                print(f"  ⚠️  Unusual {z_name} Z: {z_val:.2f}mm")
+
+    def create_trajectory_summary(self, contours):
+        """Create a summary of the trajectory for review."""
+        print("\n" + "="*50)
+        print("TRAJECTORY SUMMARY")
+        print("="*50)
+        
+        total_segments = sum(len(c)-1 for c in contours if len(c) > 1)
+        total_distance = 0
+        max_jump = 0
+        
+        for i, contour_points in enumerate(contours):
+            contour_distance = 0
+            if len(contour_points) > 1:
+                for j in range(1, len(contour_points)):
+                    x1, y1 = contour_points[j-1]
+                    x2, y2 = contour_points[j]
+                    seg_dist = np.sqrt((x2 - x1)**2 + (y2 - y1)**2)
+                    contour_distance += seg_dist
+                
+                total_distance += contour_distance
+                print(f"Contour {i+1:3d}: {len(contour_points):3d} points, {contour_distance:6.1f}mm length")
+        
+        # Calculate travel distances between contours
+        travel_distance = 0
+        for i in range(len(contours)-1):
+            if len(contours[i]) > 0 and len(contours[i+1]) > 0:
+                end_point = contours[i][-1]
+                start_point = contours[i+1][0]
+                travel_dist = np.sqrt((start_point[0] - end_point[0])**2 + 
+                                     (start_point[1] - end_point[1])**2)
+                travel_distance += travel_dist
+                max_jump = max(max_jump, travel_dist)
+        
+        print("-"*50)
+        print(f"Total contours:     {len(contours)}")
+        print(f"Total segments:     {total_segments}")
+        print(f"Drawing distance:   {total_distance:.1f}mm")
+        print(f"Travel distance:    {travel_distance:.1f}mm")
+        print(f"Max travel jump:    {max_jump:.1f}mm")
+        print(f"Estimated time:     {(total_segments * 0.1 + len(contours) * 0.5):.1f}s")
+        print("="*50)
+
+    def export_trajectory_for_pybullet(self, contours, export_format="json"):
+        """Export trajectory data for PyBullet simulation."""
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        
+        if export_format.lower() == "json":
+            return self._export_json_trajectory(contours, timestamp)
+        elif export_format.lower() == "csv":
+            return self._export_csv_trajectory(contours, timestamp)
+        else:
+            print(f"Unknown export format: {export_format}")
+            return None
+    
+    def _export_json_trajectory(self, contours, timestamp):
+        """Export trajectory as JSON for PyBullet simulation."""
+        filename = f"trajectory_export_{timestamp}.json"
+        
+        # Create trajectory data structure
+        trajectory_data = {
+            "metadata": {
+                "export_time": timestamp,
+                "robot_type": "MyCobot320",
+                "coordinate_system": "cartesian_mm",
+                "workspace": {
+                    "origin_x": ORIGIN_X,
+                    "origin_y": ORIGIN_Y, 
+                    "origin_z": ORIGIN_Z,
+                    "width_mm": DRAWING_AREA_WIDTH_MM,
+                    "height_mm": DRAWING_AREA_HEIGHT_MM
+                },
+                "drawing_parameters": {
+                    "pen_retract_z": PEN_RETRACT_Z,
+                    "pen_drawing_z": PEN_DRAWING_Z,
+                    "drawing_speed": DRAWING_SPEED,
+                    "approach_speed": APPROACH_SPEED,
+                    "travel_speed": TRAVEL_SPEED
+                },
+                "orientation": self.DRAWING_ORIENTATION
+            },
+            "trajectory": {
+                "total_contours": len(contours),
+                "commands": []
+            }
+        }
+        
+        command_id = 0
+        
+        for contour_idx, contour_points in enumerate(contours):
+            if len(contour_points) < 2:
+                continue
+                
+            # Move to start position (pen up)
+            start_x, start_y = contour_points[0]
+            trajectory_data["trajectory"]["commands"].append({
+                "id": command_id,
+                "type": "move_to_position",
+                "contour_id": contour_idx,
+                "position": [start_x, start_y, PEN_RETRACT_Z],
+                "orientation": self.DRAWING_ORIENTATION,
+                "speed": TRAVEL_SPEED,
+                "pen_down": False,
+                "description": f"Move to start of contour {contour_idx + 1}"
+            })
+            command_id += 1
+            
+            # Pen down
+            trajectory_data["trajectory"]["commands"].append({
+                "id": command_id,
+                "type": "pen_down",
+                "contour_id": contour_idx,
+                "position": [start_x, start_y, PEN_DRAWING_Z],
+                "orientation": self.DRAWING_ORIENTATION,
+                "speed": APPROACH_SPEED,
+                "pen_down": True,
+                "description": f"Lower pen for contour {contour_idx + 1}"
+            })
+            command_id += 1
+            
+            # Draw contour segments
+            for point_idx in range(1, len(contour_points)):
+                x, y = contour_points[point_idx]
+                trajectory_data["trajectory"]["commands"].append({
+                    "id": command_id,
+                    "type": "draw_line",
+                    "contour_id": contour_idx,
+                    "position": [x, y, PEN_DRAWING_Z],
+                    "orientation": self.DRAWING_ORIENTATION,
+                    "speed": DRAWING_SPEED,
+                    "pen_down": True,
+                    "description": f"Draw to point {point_idx} in contour {contour_idx + 1}"
+                })
+                command_id += 1
+            
+            # Pen up
+            end_x, end_y = contour_points[-1]
+            trajectory_data["trajectory"]["commands"].append({
+                "id": command_id,
+                "type": "pen_up",
+                "contour_id": contour_idx,
+                "position": [end_x, end_y, PEN_RETRACT_Z],
+                "orientation": self.DRAWING_ORIENTATION,
+                "speed": LIFT_SPEED,
+                "pen_down": False,
+                "description": f"Lift pen after contour {contour_idx + 1}"
+            })
+            command_id += 1
+        
+        # Save to file
+        try:
+            with open(filename, 'w') as f:
+                json.dump(trajectory_data, f, indent=2)
+            print(f"✅ Trajectory exported to {filename}")
+            print(f"   Total commands: {len(trajectory_data['trajectory']['commands'])}")
+            return filename
+        except Exception as e:
+            print(f"❌ Failed to export JSON: {e}")
+            return None
+    
+    def _export_csv_trajectory(self, contours, timestamp):
+        """Export trajectory as CSV for simple PyBullet loading."""
+        filename = f"trajectory_commands_{timestamp}.csv"
+        
+        try:
+            with open(filename, 'w', newline='') as csvfile:
+                fieldnames = ['command_id', 'type', 'contour_id', 'x', 'y', 'z', 
+                             'rx', 'ry', 'rz', 'speed', 'pen_down', 'description']
+                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                writer.writeheader()
+                
+                command_id = 0
+                
+                for contour_idx, contour_points in enumerate(contours):
+                    if len(contour_points) < 2:
+                        continue
+                    
+                    # Move to start position
+                    start_x, start_y = contour_points[0]
+                    writer.writerow({
+                        'command_id': command_id,
+                        'type': 'move_to_position',
+                        'contour_id': contour_idx,
+                        'x': start_x, 'y': start_y, 'z': PEN_RETRACT_Z,
+                        'rx': self.DRAWING_ORIENTATION[0],
+                        'ry': self.DRAWING_ORIENTATION[1], 
+                        'rz': self.DRAWING_ORIENTATION[2],
+                        'speed': TRAVEL_SPEED,
+                        'pen_down': 0,
+                        'description': f'Move to start of contour {contour_idx + 1}'
+                    })
+                    command_id += 1
+                    
+                    # Pen down
+                    writer.writerow({
+                        'command_id': command_id,
+                        'type': 'pen_down',
+                        'contour_id': contour_idx,
+                        'x': start_x, 'y': start_y, 'z': PEN_DRAWING_Z,
+                        'rx': self.DRAWING_ORIENTATION[0],
+                        'ry': self.DRAWING_ORIENTATION[1],
+                        'rz': self.DRAWING_ORIENTATION[2], 
+                        'speed': APPROACH_SPEED,
+                        'pen_down': 1,
+                        'description': f'Lower pen for contour {contour_idx + 1}'
+                    })
+                    command_id += 1
+                    
+                    # Draw segments
+                    for point_idx in range(1, len(contour_points)):
+                        x, y = contour_points[point_idx]
+                        writer.writerow({
+                            'command_id': command_id,
+                            'type': 'draw_line', 
+                            'contour_id': contour_idx,
+                            'x': x, 'y': y, 'z': PEN_DRAWING_Z,
+                            'rx': self.DRAWING_ORIENTATION[0],
+                            'ry': self.DRAWING_ORIENTATION[1],
+                            'rz': self.DRAWING_ORIENTATION[2],
+                            'speed': DRAWING_SPEED,
+                            'pen_down': 1,
+                            'description': f'Draw to point {point_idx} in contour {contour_idx + 1}'
+                        })
+                        command_id += 1
+                    
+                    # Pen up
+                    end_x, end_y = contour_points[-1]
+                    writer.writerow({
+                        'command_id': command_id,
+                        'type': 'pen_up',
+                        'contour_id': contour_idx,
+                        'x': end_x, 'y': end_y, 'z': PEN_RETRACT_Z,
+                        'rx': self.DRAWING_ORIENTATION[0],
+                        'ry': self.DRAWING_ORIENTATION[1],
+                        'rz': self.DRAWING_ORIENTATION[2],
+                        'speed': LIFT_SPEED,
+                        'pen_down': 0,
+                        'description': f'Lift pen after contour {contour_idx + 1}'
+                    })
+                    command_id += 1
+            
+            print(f"✅ Trajectory exported to {filename}")
+            print(f"   Total commands: {command_id}")
+            return filename
+            
+        except Exception as e:
+            print(f"❌ Failed to export CSV: {e}")
+            return None
+
+    def export_gcode(self, contours, filename=None):
+        """Export contours as G-code (.nc) file compatible with MyCobot workflow."""
+        if not filename:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"drawing_{timestamp}.nc"
+        
+        try:
+            with open(filename, 'w') as f:
+                # Write G-code header
+                f.write("G90\n")  # Absolute positioning
+                f.write("G4 S1\n")  # Pause 1 second
+                
+                # Initial positioning - move to safe height
+                f.write(f"G01 X{ORIGIN_X:.2f} Y{ORIGIN_Y:.2f} Z{PEN_RETRACT_Z:.2f} F15\n")
+                f.write("G4 S1\n")  # Pause
+                
+                for contour_idx, contour_points in enumerate(contours):
+                    if len(contour_points) < 2:
+                        continue
+                    
+                    # Move to start position (pen up)
+                    start_x, start_y = contour_points[0]
+                    f.write(f"G0 X{start_x:.2f} Y{start_y:.2f}\n")
+                    
+                    # Lower pen to drawing height
+                    f.write(f"G0 Z{PEN_DRAWING_Z:.2f}\n")
+                    
+                    # Draw contour segments
+                    for point_idx in range(1, len(contour_points)):
+                        x, y = contour_points[point_idx]
+                        f.write(f"G1 X{x:.2f} Y{y:.2f}\n")
+                    
+                    # Lift pen after contour
+                    f.write(f"G0 Z{PEN_RETRACT_Z:.2f}\n")
+                
+                # Final position and end
+                f.write(f"G0 X{ORIGIN_X:.2f} Y{ORIGIN_Y:.2f}\n")
+                f.write("M21 P0\n")  # Program end
+            
+            print(f"✅ G-code exported to {filename}")
+            print(f"   Total contours: {len(contours)}")
+            return filename
+            
+        except Exception as e:
+            print(f"❌ Failed to export G-code: {e}")
+            return None
+
+    def process_gcode(self, file_path):
+        """
+        Parse the contents of the gcode file, extract the XYZ coordinate values, and save the coordinate data into a list
+        :param file_path: Gcode file path
+        :return: A coordinate list with robot orientation
+        """
+        # The last valid coordinate, using the current coordinates as starting attitude
+        current_coords = self.mc.get_coords()
+        if current_coords:
+            last_coords = [0.0, 0.0, 0.0, current_coords[3], current_coords[4], current_coords[5]]
+        else:
+            last_coords = [0.0, 0.0, 0.0] + self.DRAWING_ORIENTATION
+        
+        data_coords = []
+        
+        try:
+            with open(file_path, 'r') as file:
+                # Line-by-line processing instructions
+                for line in file:
+                    command = line.strip()  # Remove newline characters and other whitespace characters at the end of the line
+                    if command.startswith("G0") or command.startswith("G1"):  # Move command
+                        coords = last_coords[:]  # Copy the previous valid coordinates
+                        command_parts = command.split()
+                        for part in command_parts[1:]:
+                            if part.startswith("X") or part.startswith("x"):
+                                coords[0] = float(part[1:])  # Extract and transform X coordinate data
+                            elif part.startswith("Y") or part.startswith("y"):
+                                coords[1] = float(part[1:])  # Extract and transform Y coordinate data
+                            elif part.startswith("Z") or part.startswith("z"):
+                                coords[2] = float(part[1:])  # Extract and transform Z coordinate data
+                        
+                        # If XY data is missing, use the last valid XY coordinates
+                        if coords[0] == 0.0 and coords[1] == 0.0:
+                            coords[0] = last_coords[0]
+                            coords[1] = last_coords[1]
+                        if coords[2] == 0.0:  # If Z data is missing, use the last valid Z coordinate
+                            coords[2] = last_coords[2]
+                        
+                        last_coords = coords
+                        data_coords.append(coords)  # Add coordinates to list and save
+        except Exception as e:
+            print(f"❌ Failed to parse G-code file: {e}")
+            return []
+        
+        return data_coords
+
+    def execute_gcode_drawing(self, file_path, draw_speed=100):
+        """
+        Execute drawing from a G-code file using MyCobot 320.
+        :param file_path: Path to the G-code (.nc) file
+        :param draw_speed: Drawing speed (0-100)
+        """
+        print(f"Processing G-code file: {file_path}")
+        
+        # Parse G-code file to get coordinate data
+        coords_data = self.process_gcode(file_path)
+        
+        if not coords_data:
+            print("❌ No valid coordinates found in G-code file")
+            return False
+        
+        print(f"✅ Loaded {len(coords_data)} coordinate points")
+        
+        # Move to home position first
+        self.go_to_home_position()
+        
+        # Execute each coordinate command
+        print("Starting G-code execution...")
+        for i, coords in enumerate(coords_data):
+            try:
+                # Send coordinates to the robot arm with proper orientation
+                self.synchronized_move(coords, draw_speed, 1)  # Use mode 1 for G-code execution
+                
+                # Progress update every 10 moves
+                if i % 10 == 0:
+                    progress = (i + 1) / len(coords_data) * 100
+                    print(f"Progress: {progress:.1f}% ({i+1}/{len(coords_data)})")
+                
+            except Exception as e:
+                print(f"❌ Error executing coordinate {i+1}: {e}")
+                continue
+        
+        print("✅ G-code execution completed!")
+        self.go_to_home_position()
+        return True
+
+    def record_home_position(self):
+        """
+        Record current robot position as home position (as described in their workflow).
+        This should be done after manually positioning the pen tip on the drawing board.
+        """
+        print("\n--- RECORDING HOME POSITION ---")
+        print("Position the robot arm so the pen tip lightly touches the drawing board,")
+        print("then press Enter to record this as the home position.")
+        input("Press Enter when ready...")
+        
+        try:
+            # Get current joint angles and coordinates
+            current_angles = self.mc.get_angles()
+            current_coords = self.mc.get_coords()
+            
+            if not current_angles or not current_coords:
+                print("❌ Failed to get current robot position")
+                return False
+            
+            home_position = {
+                "joint_angles": current_angles,
+                "cartesian_coords": current_coords,
+                "timestamp": datetime.now().isoformat(),
+                "description": "Home position for drawing board contact"
+            }
+            
+            # Save to file
+            with open(HOME_POSITION_FILE, 'w') as f:
+                json.dump(home_position, f, indent=2)
+            
+            print("✅ Home position recorded successfully!")
+            print(f"Joint angles: {current_angles}")
+            print(f"Cartesian coordinates: {current_coords}")
+            print(f"Saved to: {HOME_POSITION_FILE}")
+            
+            return True
+            
+        except Exception as e:
+            print(f"❌ Failed to record home position: {e}")
+            return False
+
+    def load_home_position(self):
+        """Load previously recorded home position."""
+        try:
+            if not os.path.exists(HOME_POSITION_FILE):
+                print(f"❌ Home position file not found: {HOME_POSITION_FILE}")
+                return None
+            
+            with open(HOME_POSITION_FILE, 'r') as f:
+                home_position = json.load(f)
+            
+            print(f"✅ Home position loaded from {HOME_POSITION_FILE}")
+            print(f"Recorded: {home_position.get('timestamp', 'Unknown')}")
+            
+            return home_position
+            
+        except Exception as e:
+            print(f"❌ Failed to load home position: {e}")
+            return None
+
+    def go_to_recorded_home(self):
+        """Move to the recorded home position."""
+        home_pos = self.load_home_position()
+        if not home_pos:
+            print("Using default home position instead...")
+            self.go_to_home_position()
+            return False
+        
+        try:
+            print("Moving to recorded home position...")
+            
+            # Move to recorded joint angles
+            joint_angles = home_pos["joint_angles"]
+            self.synchronized_angles(joint_angles, 30)
+            
+            print("✅ Moved to recorded home position")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Failed to move to recorded home position: {e}")
+            print("Using default home position instead...")
+            self.go_to_home_position()
+            return False
+
+    def process_inkscape_ngc(self, file_path):
+        """
+        Process NGC files generated by Inkscape with ElephantRobotics plugin.
+        These files may have different formatting than our basic G-code.
+        """
+        print(f"Processing Inkscape NGC file: {file_path}")
+        
+        # Load home position for proper coordinate reference
+        home_pos = self.load_home_position()
+        if home_pos:
+            base_coords = home_pos["cartesian_coords"]
+            print(f"Using recorded home position as reference: {base_coords}")
+        else:
+            print("⚠️  No recorded home position found, using default coordinates")
+            base_coords = [ORIGIN_X, ORIGIN_Y, ORIGIN_Z] + self.DRAWING_ORIENTATION
+        
+        data_coords = []
+        
+        try:
+            with open(file_path, 'r') as file:
+                for line_num, line in enumerate(file, 1):
+                    command = line.strip()
+                    
+                    # Skip empty lines and comments
+                    if not command or command.startswith(';') or command.startswith('('):
+                        continue
+                    
+                    # Handle G-code commands
+                    if command.startswith("G0") or command.startswith("G1") or command.startswith("G00") or command.startswith("G01"):
+                        try:
+                            coords = base_coords[:]  # Start with base coordinates
+                            command_parts = command.split()
+                            
+                            for part in command_parts[1:]:
+                                if part.startswith("X") or part.startswith("x"):
+                                    # Convert from Inkscape coordinate system
+                                    x_val = float(part[1:])
+                                    coords[0] = base_coords[0] + x_val
+                                elif part.startswith("Y") or part.startswith("y"):
+                                    # Convert from Inkscape coordinate system  
+                                    y_val = float(part[1:])
+                                    coords[1] = base_coords[1] + y_val
+                                elif part.startswith("Z") or part.startswith("z"):
+                                    z_val = float(part[1:])
+                                    coords[2] = base_coords[2] + z_val
+                            
+                            data_coords.append(coords)
+                            
+                        except ValueError as e:
+                            print(f"⚠️  Line {line_num}: Could not parse coordinates: {command}")
+                            continue
+                    
+                    # Handle other commands (M-codes, etc.)
+                    elif command.startswith("M") or command.startswith("G4"):
+                        # For now, skip these but could add pause/tool commands later
+                        continue
+                        
+        except Exception as e:
+            print(f"❌ Failed to parse Inkscape NGC file: {e}")
+            return []
+        
+        print(f"✅ Parsed {len(data_coords)} movement commands from Inkscape NGC file")
+        return data_coords
+
+    def execute_inkscape_ngc(self, file_path, draw_speed=50):
+        """
+        Execute an Inkscape-generated NGC file using their recommended workflow.
+        """
+        print(f"\n--- EXECUTING INKSCAPE NGC FILE ---")
+        print(f"File: {file_path}")
+        
+        # Parse the NGC file
+        coords_data = self.process_inkscape_ngc(file_path)
+        
+        if not coords_data:
+            print("❌ No valid coordinates found in NGC file")
+            return False
+        
+        print(f"✅ Loaded {len(coords_data)} coordinate points")
+        
+        # Move to recorded home position first
+        if not self.go_to_recorded_home():
+            print("⚠️  Could not move to recorded home position")
+            response = input("Continue with default home position? (y/N): ").lower().strip()
+            if response != 'y':
+                return False
+        
+        # Execute trajectory
+        print("Starting NGC trajectory execution...")
+        start_time = time.time()
+        
+        for i, coords in enumerate(coords_data):
+            try:
+                # Send coordinates to robot
+                self.synchronized_move(coords, draw_speed, 1)
+                
+                # Progress update
+                if i % 20 == 0:  # Every 20 moves
+                    progress = (i + 1) / len(coords_data) * 100
+                    elapsed = time.time() - start_time
+                    print(f"Progress: {progress:.1f}% ({i+1}/{len(coords_data)}) - {elapsed:.1f}s elapsed")
+                
+            except Exception as e:
+                print(f"❌ Error executing coordinate {i+1}: {e}")
+                continue
+        
+        elapsed_time = time.time() - start_time
+        print(f"✅ NGC execution completed in {elapsed_time:.1f}s!")
+        
+        # Return to home position
+        self.go_to_recorded_home()
+        return True
+
+    def validate_ngc_file(self, file_path):
+        """
+        Validate an NGC file for RoboFlow compatibility.
+        Check for proper formatting and coordinate ranges.
+        """
+        print(f"Validating NGC file: {file_path}")
+        
+        issues = []
+        line_count = 0
+        gcode_commands = 0
+        coordinate_ranges = {"X": [], "Y": [], "Z": []}
+        
+        try:
+            with open(file_path, 'r') as file:
+                for line_num, line in enumerate(file, 1):
+                    line_count += 1
+                    command = line.strip()
+                    
+                    # Skip empty lines and comments
+                    if not command or command.startswith(';') or command.startswith('('):
+                        continue
+                    
+                    # Check for G-code movement commands
+                    if command.startswith(("G0", "G1", "G00", "G01")):
+                        gcode_commands += 1
+                        command_parts = command.split()
+                        
+                        for part in command_parts[1:]:
+                            if part.startswith(("X", "x")):
+                                try:
+                                    x_val = float(part[1:])
+                                    coordinate_ranges["X"].append(x_val)
+                                except ValueError:
+                                    issues.append(f"Line {line_num}: Invalid X coordinate: {part}")
+                            elif part.startswith(("Y", "y")):
+                                try:
+                                    y_val = float(part[1:])
+                                    coordinate_ranges["Y"].append(y_val)
+                                except ValueError:
+                                    issues.append(f"Line {line_num}: Invalid Y coordinate: {part}")
+                            elif part.startswith(("Z", "z")):
+                                try:
+                                    z_val = float(part[1:])
+                                    coordinate_ranges["Z"].append(z_val)
+                                except ValueError:
+                                    issues.append(f"Line {line_num}: Invalid Z coordinate: {part}")
+        
+        except Exception as e:
+            issues.append(f"Failed to read file: {e}")
+            return False, issues
+        
+        # Check coordinate ranges against recommended Inkscape limits
+        if coordinate_ranges["X"]:
+            x_range = max(coordinate_ranges["X"]) - min(coordinate_ranges["X"])
+            if x_range > INKSCAPE_DRAWING_WIDTH:
+                issues.append(f"X range ({x_range:.1f}mm) exceeds recommended Inkscape width ({INKSCAPE_DRAWING_WIDTH}mm)")
+        
+        if coordinate_ranges["Y"]:
+            y_range = max(coordinate_ranges["Y"]) - min(coordinate_ranges["Y"])
+            if y_range > INKSCAPE_DRAWING_HEIGHT:
+                issues.append(f"Y range ({y_range:.1f}mm) exceeds recommended Inkscape height ({INKSCAPE_DRAWING_HEIGHT}mm)")
+        
+        # Summary
+        print(f"Validation Results:")
+        print(f"  Lines: {line_count}")
+        print(f"  G-code commands: {gcode_commands}")
+        
+        if coordinate_ranges["X"]:
+            print(f"  X range: {min(coordinate_ranges['X']):.1f} to {max(coordinate_ranges['X']):.1f} mm")
+        if coordinate_ranges["Y"]:
+            print(f"  Y range: {min(coordinate_ranges['Y']):.1f} to {max(coordinate_ranges['Y']):.1f} mm")
+        if coordinate_ranges["Z"]:
+            print(f"  Z range: {min(coordinate_ranges['Z']):.1f} to {max(coordinate_ranges['Z']):.1f} mm")
+        
+        if issues:
+            print(f"  ⚠️  Issues found: {len(issues)}")
+            for issue in issues[:5]:  # Show first 5 issues
+                print(f"    - {issue}")
+            if len(issues) > 5:
+                print(f"    ... and {len(issues) - 5} more issues")
+            return False, issues
+        else:
+            print("  ✅ File validation passed")
+            return True, []
+
+    def export_inkscape_compatible_gcode(self, contours, filename=None):
+        """
+        Export G-code in a format more compatible with Inkscape/RoboFlow workflow.
+        Uses their coordinate system and formatting conventions.
+        """
+        if not filename:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"inkscape_drawing_{timestamp}.ngc"
+        
+        try:
+            with open(filename, 'w') as f:
+                # Write header comments (Inkscape style)
+                f.write("; Generated for ElephantRobotics MyCobot\n")
+                f.write(f"; Created: {datetime.now().isoformat()}\n")
+                f.write(f"; Drawing area: {INKSCAPE_DRAWING_WIDTH}x{INKSCAPE_DRAWING_HEIGHT}mm\n")
+                f.write("; Compatible with RoboFlow trajectory teaching\n")
+                f.write(";\n")
+                
+                # Initialize with absolute positioning
+                f.write("G90  ; Absolute positioning\n")
+                f.write("G21  ; Units in millimeters\n")
+                
+                # Home position (will be adjusted by recorded home position)
+                f.write("G0 X0 Y0 Z0  ; Move to home position\n")
+                f.write("G4 P1000     ; Pause 1 second\n")
+                
+                for contour_idx, contour_points in enumerate(contours):
+                    if len(contour_points) < 2:
+                        continue
+                    
+                    f.write(f"; Contour {contour_idx + 1}\n")
+                    
+                    # Move to start position (pen up)
+                    start_x, start_y = contour_points[0]
+                    # Convert to relative coordinates from home position
+                    rel_x = start_x - ORIGIN_X
+                    rel_y = start_y - ORIGIN_Y
+                    f.write(f"G0 X{rel_x:.3f} Y{rel_y:.3f} Z5.0\n")  # 5mm above surface
+                    
+                    # Lower pen
+                    f.write(f"G0 Z0.0\n")  # Touch surface
+                    
+                    # Draw contour segments
+                    for point_idx in range(1, len(contour_points)):
+                        x, y = contour_points[point_idx]
+                        rel_x = x - ORIGIN_X
+                        rel_y = y - ORIGIN_Y
+                        f.write(f"G1 X{rel_x:.3f} Y{rel_y:.3f}\n")
+                    
+                    # Lift pen
+                    f.write(f"G0 Z5.0\n")
+                
+                # Return to home and end
+                f.write("; Return to home\n")
+                f.write("G0 X0 Y0 Z5.0\n")
+                f.write("M30  ; Program end\n")
+            
+            print(f"✅ Inkscape-compatible NGC exported to {filename}")
+            print(f"   Total contours: {len(contours)}")
+            print(f"   Compatible with RoboFlow trajectory teaching")
+            
+            # Validate the generated file
+            is_valid, issues = self.validate_ngc_file(filename)
+            if not is_valid:
+                print(f"⚠️  Generated file has validation issues:")
+                for issue in issues[:3]:
+                    print(f"    {issue}")
+            
+            return filename
+            
+        except Exception as e:
+            print(f"❌ Failed to export Inkscape-compatible NGC: {e}")
+            return None
+
+    def create_pybullet_simulation_script(self, trajectory_file, script_name=None):
+        """Create a basic PyBullet simulation script template."""
+        if not script_name:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            script_name = f"pybullet_simulation_{timestamp}.py"
+        
+        script_content = f'''#!/usr/bin/env python3
+"""
+PyBullet simulation script for trajectory: {trajectory_file}
+Generated automatically from horizontal_table_drawing.py
+"""
+
+import pybullet as p
+import pybullet_data
+import json
+import time
+import numpy as np
+
+class RobotDrawingSimulation:
+    def __init__(self):
+        # Connect to PyBullet
+        self.physics_client = p.connect(p.GUI)
+        p.setAdditionalSearchPath(pybullet_data.getDataPath())
+        
+        # Set up simulation environment
+        p.setGravity(0, 0, -9.81)
+        p.loadURDF("plane.urdf", [0, 0, 0])
+        
+        # Load robot (adjust path to your robot URDF)
+        # self.robot_id = p.loadURDF("path/to/mycobot320.urdf", [0, 0, 0])
+        
+        # For now, use a simple marker
+        self.marker_id = p.loadURDF("sphere_small.urdf", [0, 0, 0.1])
+        p.changeVisualShape(self.marker_id, -1, rgbaColor=[1, 0, 0, 1])
+        
+        # Drawing surface
+        self.table_id = p.loadURDF("cube.urdf", 
+                                  [{ORIGIN_X/1000}, {ORIGIN_Y/1000}, {(ORIGIN_Z-50)/1000}],
+                                  globalScaling=0.001)
+        p.changeVisualShape(self.table_id, -1, rgbaColor=[0.8, 0.8, 0.8, 1])
+        
+        # Trajectory data
+        self.trajectory_data = None
+        self.pen_down = False
+        self.trajectory_lines = []  # Store drawn lines
+        
+    def load_trajectory(self, filename):
+        """Load trajectory from JSON file."""
+        try:
+            with open(filename, 'r') as f:
+                self.trajectory_data = json.load(f)
+            print(f"Loaded trajectory with {{len(self.trajectory_data['trajectory']['commands'])}} commands")
+            return True
+        except Exception as e:
+            print(f"Failed to load trajectory: {{e}}")
+            return False
+    
+    def execute_trajectory(self):
+        """Execute the loaded trajectory."""
+        if not self.trajectory_data:
+            print("No trajectory loaded!")
+            return
+        
+        commands = self.trajectory_data['trajectory']['commands']
+        prev_pos = None
+        
+        for cmd in commands:
+            # Convert mm to meters for PyBullet
+            pos = [cmd['position'][0]/1000, cmd['position'][1]/1000, cmd['position'][2]/1000]
+            
+            # Move marker to position
+            p.resetBasePositionAndOrientation(self.marker_id, pos, [0, 0, 0, 1])
+            
+            # Handle pen state
+            if cmd['type'] == 'pen_down':
+                self.pen_down = True
+                p.changeVisualShape(self.marker_id, -1, rgbaColor=[0, 1, 0, 1])  # Green when drawing
+            elif cmd['type'] == 'pen_up':
+                self.pen_down = False
+                p.changeVisualShape(self.marker_id, -1, rgbaColor=[1, 0, 0, 1])  # Red when not drawing
+            
+            # Draw line if pen is down and we have a previous position
+            if self.pen_down and prev_pos and cmd['type'] == 'draw_line':
+                line_id = p.addUserDebugLine(prev_pos, pos, [0, 0, 1], 2)  # Blue line
+                self.trajectory_lines.append(line_id)
+            
+            prev_pos = pos
+            
+            # Step simulation
+            p.stepSimulation()
+            time.sleep(0.01)  # Adjust for visualization speed
+            
+            print(f"Command {{cmd['id']}}: {{cmd['type']}} - {{cmd['description']}}")
+    
+    def run(self):
+        """Run the simulation."""
+        if self.load_trajectory("{trajectory_file}"):
+            print("Press Enter to start trajectory execution...")
+            input()
+            self.execute_trajectory()
+            print("Trajectory complete! Press Enter to exit...")
+            input()
+        
+        p.disconnect()
+
+if __name__ == "__main__":
+    sim = RobotDrawingSimulation()
+    sim.run()
+'''
+        
+        try:
+            with open(script_name, 'w') as f:
+                f.write(script_content)
+            print(f"✅ PyBullet simulation script created: {script_name}")
+            return script_name
+        except Exception as e:
+            print(f"❌ Failed to create simulation script: {e}")
+            return None
+
+    def _handle_trajectory_export(self, contours):
+        """Handle interactive trajectory export."""
+        print("\n--- TRAJECTORY EXPORT ---")
+        print("Choose export format:")
+        print("  1) JSON (recommended for PyBullet)")
+        print("  2) CSV (for spreadsheet analysis)")
+        print("  3) Both formats")
+        
+        choice = input("Enter choice (1-3): ").strip()
+        
+        exported_files = []
+        
+        if choice in ['1', '3']:
+            # Export JSON
+            json_file = self.export_trajectory_for_pybullet(contours, "json")
+            if json_file:
+                exported_files.append(json_file)
+        
+        if choice in ['2', '3']:
+            # Export CSV
+            csv_file = self.export_trajectory_for_pybullet(contours, "csv")
+            if csv_file:
+                exported_files.append(csv_file)
+        
+        if not exported_files:
+            print("No files exported.")
+            return
+        
+        # Offer to create PyBullet simulation script
+        if any(f.endswith('.json') for f in exported_files):
+            create_sim = input("Create PyBullet simulation script? (y/n): ").lower().strip()
+            if create_sim == 'y':
+                json_file = next(f for f in exported_files if f.endswith('.json'))
+                script_file = self.create_pybullet_simulation_script(json_file)
+                if script_file:
+                    exported_files.append(script_file)
+        
+        print(f"\n✅ Export complete! Files created:")
+        for file in exported_files:
+            print(f"   • {file}")
+        print("\nYou can now run the PyBullet simulation to test the trajectory.")
+
+    def draw_sketch(self, sketch_image):
+        """OPTIMIZED: Draw the sketch with performance improvements."""
+        if sketch_image is None:
+            print("Cannot draw, sketch image is missing.")
+            return
+        
+        # Preprocess all contours at once
+        print("Preprocessing contours...")
+        contours = self.preprocess_contours(sketch_image)
+        
+        # Validate trajectory points
+        if not self.validate_trajectory_points(contours):
+            print("❌ Trajectory validation failed! Please check workspace settings.")
+            response = input("Continue anyway? (y/N): ").lower().strip()
+            if response != 'y':
+                return
+        
+        # Create trajectory summary
+        self.create_trajectory_summary(contours)
+        
+        if OPTIMIZE_DRAWING_PATH:
+            print("Optimizing path...")
+            # Simple nearest-neighbor optimization for pre-converted points
+            if contours:
+                optimized = [contours[0]]
+                remaining = contours[1:]
+                current_end = contours[0][-1] if contours[0] else (0, 0)
+                
+                while remaining:
+                    closest_idx = 0
+                    min_dist = float('inf')
+                    for i, contour in enumerate(remaining):
+                        if contour:
+                            dist = ((current_end[0] - contour[0][0])**2 + (current_end[1] - contour[0][1])**2)**0.5
+                            if dist < min_dist:
+                                min_dist = dist
+                                closest_idx = i
+                    
+                    closest = remaining.pop(closest_idx)
+                    optimized.append(closest)
+                    current_end = closest[-1] if closest else current_end
+                contours = optimized
+        
+        # Create and show preview
+        print("Creating drawing preview...")
+        preview_img = self.create_contour_preview(contours)
+        cv2.imshow("Drawing Preview - Check path and order", preview_img)
+        
+        print("\nPreview Controls:")
+        print("  'd' = Start drawing")
+        print("  's' = Save preview image")
+        print("  'e' = Export trajectory for PyBullet simulation")
+        print("  'g' = Export G-code (.nc) file for MyCobot execution")
+        print("  'i' = Export Inkscape-compatible NGC file for RoboFlow")
+        print("  Any other key = Cancel drawing")
+        
+        key = cv2.waitKey(0)
+        cv2.destroyAllWindows()
+        
+        if key == ord('s'):
+            preview_filename = "drawing_preview.jpg"
+            cv2.imwrite(preview_filename, preview_img)
+            print(f"Preview saved as {preview_filename}")
+            print("Press 'd' to draw, 'e' to export, or any other key to cancel:")
+            key = cv2.waitKey(0)
+            cv2.destroyAllWindows()
+        elif key == ord('e'):
+            self._handle_trajectory_export(contours)
+            print("Press 'd' to draw, 'g' to export G-code, or any other key to cancel:")
+            key = cv2.waitKey(0)
+            cv2.destroyAllWindows()
+        elif key == ord('g'):
+            # Export G-code
+            gcode_file = self.export_gcode(contours)
+            if gcode_file:
+                print(f"G-code exported to {gcode_file}")
+                execute_now = input("Execute G-code drawing now? (y/n): ").lower().strip()
+                if execute_now == 'y':
+                    speed = input("Enter drawing speed (1-100, default 50): ").strip()
+                    try:
+                        draw_speed = int(speed) if speed else 50
+                        draw_speed = max(1, min(100, draw_speed))  # Clamp to valid range
+                    except ValueError:
+                        draw_speed = 50
+                    self.execute_gcode_drawing(gcode_file, draw_speed)
+            print("Press 'd' to draw directly or any other key to cancel:")
+            key = cv2.waitKey(0)
+            cv2.destroyAllWindows()
+        elif key == ord('i'):
+            # Export Inkscape-compatible NGC
+            ngc_file = self.export_inkscape_compatible_gcode(contours)
+            if ngc_file:
+                print(f"Inkscape-compatible NGC exported to {ngc_file}")
+                execute_now = input("Execute NGC drawing now? (y/n): ").lower().strip()
+                if execute_now == 'y':
+                    speed = input("Enter drawing speed (1-100, default 50): ").strip()
+                    try:
+                        draw_speed = int(speed) if speed else 50
+                        draw_speed = max(1, min(100, draw_speed))
+                    except ValueError:
+                        draw_speed = 50
+                    self.execute_inkscape_ngc(ngc_file, draw_speed)
+            print("Press 'd' to draw directly or any other key to cancel:")
+            key = cv2.waitKey(0)
+            cv2.destroyAllWindows()
+        
+        if key != ord('d'):
+            print("Drawing cancelled.")
+            return
+        
+        print(f"Drawing {len(contours)} optimized contours...")
+        print("="*60)
+        
+        # Setup
+        self.go_to_home_position()
+        time.sleep(1)  # Reduced setup time
+        
+        start_time = time.time()
+        
+        # OPTIMIZED: Draw all contours with minimal overhead
+        for i, contour_points in enumerate(contours):
+            if len(contour_points) < 2:
+                continue
+            
+            # Progress update every 50 contours instead of every contour
+            if i % 50 == 0:
+                self.print_progress_bar(i+1, len(contours), prefix="Drawing")
+            
+            # Start drawing this contour
+            start_x, start_y = contour_points[0]
+            self.gentle_pen_down(start_x, start_y)
+            
+            # Draw all segments in this contour with controlled movements
+            for j in range(1, len(contour_points)):
+                prev_x, prev_y = contour_points[j-1]
+                next_x, next_y = contour_points[j]
+                
+                # Use proper line segment drawing for better control
+                self.draw_line_segment((prev_x, prev_y), (next_x, next_y))
+            
+            # Lift pen for next contour
+            self.gentle_pen_up()
+        
+        # Final progress and timing
+        elapsed_time = time.time() - start_time
+        print()
+        print("="*60)
+        print(f"✓ OPTIMIZED Drawing complete!")
+        print(f"  Contours drawn: {len(contours)}")
+        print(f"  Time elapsed: {elapsed_time//60:.0f}m {elapsed_time%60:.0f}s")
+        print(f"  Average: {elapsed_time/len(contours):.3f}s per contour")
+        print("="*60)
+        self.go_to_home_position()
+    
+    def run(self):
+        """Main execution loop."""
+        print("\\n--- MyCobot Vertical Drawing System ---")
+        print("Optimized for gentle vertical surface drawing\\n")
+        
+        # Movement synchronization option
+        sync_option = input("Use movement synchronization? (Y/n): ").lower().strip()
+        if sync_option == 'n':
+            self.use_movement_sync = False
+            print("Movement synchronization disabled - using time-based delays")
+        else:
+            print("Movement synchronization enabled - waiting for completion")
+        
+        # Offer calibration option
+        calibrate = input("Would you like to calibrate pen pressure? (y/n): ").lower().strip()
+        if calibrate == 'y':
+            optimal_y = self.calibrate_pen_pressure()
+            if optimal_y:
+                global PEN_DRAWING_Y
+                PEN_DRAWING_Y = optimal_y
+        
+        # Test coordinate system
+        coord_test = input("Would you like to test the coordinate system? (y/n): ").lower().strip()
+        if coord_test == 'y':
+            self.test_coordinate_system()
+        
+        # Test drawing area
+        test = input("Would you like to test the drawing area? (y/n): ").lower().strip()
+        if test == 'y':
+            self.test_drawing_area()
+        
+        while True:
+            print("\n--- MAIN MENU ---")
+            print("1. Create new drawing from image")
+            print("2. Execute existing G-code file")
+            print("3. Execute Inkscape NGC file (recommended workflow)")
+            print("4. Record home position (pen touching drawing board)")
+            print("5. Test recorded home position")
+            print("6. Exit")
+            
+            action = input("Select option (1-6): ").strip()
+            
+            if action == '6' or action.lower() == 'exit':
+                break
+            elif action == '2':
+                # Execute existing G-code file
+                gcode_file = input("Enter G-code file path: ").strip()
+                if os.path.exists(gcode_file):
+                    speed = input("Enter drawing speed (1-100, default 50): ").strip()
+                    try:
+                        draw_speed = int(speed) if speed else 50
+                        draw_speed = max(1, min(100, draw_speed))
+                    except ValueError:
+                        draw_speed = 50
+                    self.execute_gcode_drawing(gcode_file, draw_speed)
+                else:
+                    print(f"File not found: {gcode_file}")
+                continue
+            elif action == '3':
+                # Execute Inkscape NGC file
+                ngc_file = input("Enter Inkscape NGC file path: ").strip()
+                if os.path.exists(ngc_file):
+                    speed = input("Enter drawing speed (1-100, default 50): ").strip()
+                    try:
+                        draw_speed = int(speed) if speed else 50
+                        draw_speed = max(1, min(100, draw_speed))
+                    except ValueError:
+                        draw_speed = 50
+                    self.execute_inkscape_ngc(ngc_file, draw_speed)
+                else:
+                    print(f"File not found: {ngc_file}")
+                continue
+            elif action == '4':
+                # Record home position
+                print("\n--- HOME POSITION RECORDING ---")
+                print("Follow these steps from the documentation:")
+                print("1. Use RoboFlow's quickmove to position the robot arm")
+                print("2. Control the arm to lightly press the pen tip on the drawing board")
+                print("3. Press Enter below to record this position")
+                self.record_home_position()
+                continue
+            elif action == '5':
+                # Test recorded home position
+                print("\n--- TESTING RECORDED HOME POSITION ---")
+                if self.go_to_recorded_home():
+                    print("✅ Successfully moved to recorded home position")
+                else:
+                    print("❌ Failed to move to recorded home position")
+                continue
+            elif action != '1':
+                print("Invalid option. Please select 1-6.")
+                continue
+            
+            # Photo capture
+            # Skip for now
+            # self.go_to_photo_position()
+            # if not self.capture_image():
+            #     print("Image capture cancelled.")
+            #     self.go_to_home_position()
+            #     continue
+            
+            # Create sketch
+            sketch = self.create_sketch()
+            if sketch is not None:
+                cv2.imshow("Generated Sketch - Press 'd' to draw, any key to cancel", sketch)
+                key = cv2.waitKey(0)
+                cv2.destroyAllWindows()
+                
+                if key == ord('d'):
+                    self.draw_sketch(sketch)
+                else:
+                    print("Drawing cancelled.")
+                    self.go_to_home_position()
+            else:
+                print("Failed to create sketch.")
+        
+        print("Shutting down.")
+
+if __name__ == "__main__":
+    if not os.path.exists(HAAR_CASCADE_PATH):
+        print(f"\\n--- ERROR ---")
+        print("Haar Cascade file not found.")
+        print(f"Path: {HAAR_CASCADE_PATH}")
+    else:
+        robot = HorizontalTableDrawingRobot()
+        robot.run()
