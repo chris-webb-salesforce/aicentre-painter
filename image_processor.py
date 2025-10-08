@@ -87,28 +87,47 @@ class ImageProcessor:
         return True
 
     def create_sketch(self):
-        """Convert captured image to pencil sketch."""
+        """Convert captured image to sketch using XDoG technique."""
         print("Converting image to sketch...")
         img = cv2.imread(CAPTURED_IMAGE_PATH)
         if img is None:
             print("Error: Could not read captured image.")
             return None
 
-        # Original pencil sketch method
+        # Convert to grayscale
         gray_image = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        inverted_image = 255 - gray_image
-        blurred_image = cv2.GaussianBlur(inverted_image, (21, 21), 0)
-        inverted_blurred_image = 255 - blurred_image
-        pencil_sketch = cv2.divide(gray_image, inverted_blurred_image, scale=256.0)
 
-        # Adaptive threshold for clean contours
-        # Block size: smaller = more detail, larger = simpler
-        final_sketch = cv2.adaptiveThreshold(
-            pencil_sketch, 255,
-            cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-            cv2.THRESH_BINARY_INV,
-            15, 4  # Detail level: 11=detailed, 15=medium, 21=simple
-        )
+        # Apply bilateral filter to reduce noise while preserving edges
+        denoised = cv2.bilateralFilter(gray_image, 9, 75, 75)
+
+        # XDoG (eXtended Difference of Gaussians) for artistic sketch
+        # This creates cleaner, more continuous lines
+        sigma1 = 0.5  # Smaller sigma for fine details
+        sigma2 = 2.0  # Larger sigma for broader structure
+
+        # Apply two Gaussian blurs
+        blur1 = cv2.GaussianBlur(denoised, (0, 0), sigma1)
+        blur2 = cv2.GaussianBlur(denoised, (0, 0), sigma2)
+
+        # Difference of Gaussians
+        dog = blur1.astype(float) - blur2.astype(float)
+
+        # Apply soft threshold to create sketch lines
+        # Tau controls line darkness threshold, phi controls sharpness
+        tau = 0.98  # Higher = fewer lines (0.95-0.99 is good range)
+        phi = 200   # Sharpness multiplier
+
+        # XDoG formula
+        xdog = dog / 255.0
+        xdog = 1.0 + np.tanh(phi * (xdog - tau))
+        xdog = (xdog * 255.0).clip(0, 255).astype(np.uint8)
+
+        # Invert to get black lines on white background
+        final_sketch = 255 - xdog
+
+        # Optional: Apply light morphological operations to connect nearby lines
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2, 2))
+        final_sketch = cv2.morphologyEx(final_sketch, cv2.MORPH_CLOSE, kernel)
 
         cv2.imwrite(SKETCH_IMAGE_PATH, final_sketch)
         print(f"Sketch created and saved to {SKETCH_IMAGE_PATH}")
