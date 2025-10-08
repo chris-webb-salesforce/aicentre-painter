@@ -125,4 +125,4 @@ DESIRED_J6_ANGLE = 0
 # =============================================================================
 # Set your OpenAI API key here or as an environment variable OPENAI_API_KEY
 OPENAI_API_KEY = None  # Set to your API key or use environment variable
-USE_OPENAI_SKETCH = False  # Set to True to use OpenAI for sketch generation
+USE_OPENAI_SKETCH = True  # Set to True to use OpenAI for sketch generation
