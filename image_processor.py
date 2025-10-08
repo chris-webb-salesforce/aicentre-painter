@@ -87,7 +87,7 @@ class ImageProcessor:
         return True
 
     def create_sketch(self):
-        """Convert captured image to sketch using XDoG technique."""
+        """Convert captured image to simple sketch with clean lines."""
         print("Converting image to sketch...")
         img = cv2.imread(CAPTURED_IMAGE_PATH)
         if img is None:
@@ -95,40 +95,32 @@ class ImageProcessor:
             return None
 
         # Convert to grayscale
-        gray_image = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-        # Apply bilateral filter to reduce noise while preserving edges
-        denoised = cv2.bilateralFilter(gray_image, 9, 75, 75)
+        # Apply strong bilateral filter to simplify image while keeping edges
+        # This reduces detail and creates smoother regions
+        simplified = cv2.bilateralFilter(gray, 15, 80, 80)
 
-        # XDoG (eXtended Difference of Gaussians) for artistic sketch
-        # This creates cleaner, more continuous lines
-        sigma1 = 0.5   # Smaller sigma for fine details
-        sigma2 = 3.0   # Larger sigma for broader structure
+        # Apply another pass for even more simplification
+        simplified = cv2.bilateralFilter(simplified, 15, 80, 80)
 
-        # Apply two Gaussian blurs
-        blur1 = cv2.GaussianBlur(denoised, (0, 0), sigma1)
-        blur2 = cv2.GaussianBlur(denoised, (0, 0), sigma2)
+        # Use Difference of Gaussians (DoG) for edge detection
+        # This creates cleaner, more artistic lines than Canny
+        blur1 = cv2.GaussianBlur(simplified, (5, 5), 0)
+        blur2 = cv2.GaussianBlur(simplified, (15, 15), 0)
 
-        # Difference of Gaussians (normalized)
-        dog = (blur1.astype(float) - blur2.astype(float))
+        # Subtract to get edges
+        dog = cv2.subtract(blur2, blur1)
 
-        # Apply threshold to create sketch lines
-        # Lower tau = more lines, higher tau = fewer lines
-        tau = 3.0   # Threshold value (try 2-10)
-        phi = 10.0  # Sharpness multiplier
+        # Enhance edges
+        dog = cv2.multiply(dog, 2.5)
 
-        # XDoG formula with better parameters
-        xdog = dog.copy()
-        xdog[xdog >= tau] = 1.0
-        xdog[xdog < tau] = 1.0 + np.tanh(phi * (xdog[xdog < tau] - tau))
-        xdog = (xdog * 255.0).clip(0, 255).astype(np.uint8)
+        # Invert so we have black lines on white
+        inverted = 255 - dog
 
-        # Threshold to binary for cleaner lines
-        _, final_sketch = cv2.threshold(xdog, 250, 255, cv2.THRESH_BINARY_INV)
-
-        # Optional: Apply light morphological operations to connect nearby lines
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2, 2))
-        final_sketch = cv2.morphologyEx(final_sketch, cv2.MORPH_CLOSE, kernel)
+        # Threshold to get clean binary lines
+        # Lower threshold = more lines, higher = fewer lines
+        _, final_sketch = cv2.threshold(inverted, 220, 255, cv2.THRESH_BINARY)
 
         cv2.imwrite(SKETCH_IMAGE_PATH, final_sketch)
         print(f"Sketch created and saved to {SKETCH_IMAGE_PATH}")
