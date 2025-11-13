@@ -15,7 +15,7 @@ BAUD_RATE = 115200
 # DRAWING WORKSPACE
 # =============================================================================
 # The (X, Y, Z) coordinate of the origin of your drawing area
-ORIGIN_X = 190.0  # Moved closer to robot base (was 200.0)
+ORIGIN_X = 220.0  # Moved further from robot base for safer reach
 ORIGIN_Y = 0.0
 ORIGIN_Z = 10.0
 
@@ -89,8 +89,8 @@ MAX_WAIT_TIME = 3.0                 # Maximum wait time per move
 # =============================================================================
 # IMAGE PROCESSING
 # =============================================================================
-IMAGE_WIDTH_PX = 400
-IMAGE_HEIGHT_PX = 600
+IMAGE_WIDTH_PX = 480
+IMAGE_HEIGHT_PX = 480  # Match your source image dimensions
 
 # Contour filtering
 MIN_CONTOUR_AREA = 20                       # Reduced to keep more detail (was 50)
@@ -119,3 +119,10 @@ DRAWING_ORIENTATION = [180, 0, 45]
 
 # Desired J6 angle for pen holder
 DESIRED_J6_ANGLE = 0
+
+# =============================================================================
+# OPENAI API SETTINGS
+# =============================================================================
+# Set your OpenAI API key here or as an environment variable OPENAI_API_KEY
+OPENAI_API_KEY = None  # Set to your API key or use environment variable
+USE_OPENAI_SKETCH = True  # Set to True to use OpenAI for sketch generation

@@ -6,6 +6,8 @@ Handles camera capture, face detection, and image-to-sketch conversion.
 import cv2
 import numpy as np
 import time
+import os
+import base64
 from config import *
 
 
@@ -87,28 +89,123 @@ class ImageProcessor:
         return True
 
     def create_sketch(self):
-        """Convert captured image to pencil sketch."""
-        print("Converting image to sketch...")
+        """Convert captured image to sketch - uses OpenAI if enabled, otherwise local processing."""
+        if USE_OPENAI_SKETCH:
+            return self.create_sketch_with_openai()
+        else:
+            return self.create_sketch_local()
+
+    def create_sketch_with_openai(self):
+        """Use OpenAI's GPT Image to generate a single-line sketch drawing."""
+        print("Generating single-line sketch using OpenAI GPT Image...")
+
+        try:
+            from openai import OpenAI
+        except ImportError:
+            print("Error: OpenAI package not installed. Run: pip install openai")
+            print("Falling back to local sketch generation...")
+            return self.create_sketch_local()
+
+        # Get API key from config or environment
+        api_key = OPENAI_API_KEY or os.getenv('OPENAI_API_KEY')
+        if not api_key:
+            print("Error: No OpenAI API key found. Set OPENAI_API_KEY in config.py or as environment variable.")
+            print("Falling back to local sketch generation...")
+            return self.create_sketch_local()
+
+        try:
+            client = OpenAI(api_key=api_key)
+
+            # Open the captured image as binary
+            with open(CAPTURED_IMAGE_PATH, 'rb') as image_file:
+                img_input = image_file
+
+                # Use GPT Image Edit to transform the photo into a single-line sketch
+                # This preserves the likeness while converting to sketch style
+                print("Converting to single-line sketch with GPT Image...")
+                result = client.images.edit(
+                    model="gpt-image-1",
+                    image=img_input,
+                    prompt="Transform this portrait into a minimalist single continuous line drawing. Use only simple, clean, flowing black lines on a pure white background. The sketch should be artistic, recognizable, and look like a hand-drawn portrait with minimal detail. No shading, no filling, just clean line work.",
+                    size="1024x1024",
+                    output_format="png"
+                )
+
+            # Decode the base64 image
+            image_base64 = result.data[0].b64_json
+            image_bytes = base64.b64decode(image_base64)
+
+            # Load and convert to the format we need
+            from PIL import Image
+            from io import BytesIO
+
+            sketch_img = Image.open(BytesIO(image_bytes))
+
+            # Convert PIL to OpenCV format
+            sketch_np = np.array(sketch_img)
+            if len(sketch_np.shape) == 3:
+                sketch_cv = cv2.cvtColor(sketch_np, cv2.COLOR_RGB2BGR)
+            else:
+                sketch_cv = sketch_np
+
+            # Convert to grayscale if needed
+            if len(sketch_cv.shape) == 3:
+                gray = cv2.cvtColor(sketch_cv, cv2.COLOR_BGR2GRAY)
+            else:
+                gray = sketch_cv
+
+            # Resize to our target dimensions
+            resized = cv2.resize(gray, (IMAGE_WIDTH_PX, IMAGE_HEIGHT_PX))
+
+            # Threshold to pure black and white
+            _, final_sketch = cv2.threshold(resized, 127, 255, cv2.THRESH_BINARY)
+
+            # Save the final sketch
+            cv2.imwrite(SKETCH_IMAGE_PATH, final_sketch)
+            print(f"✅ OpenAI sketch created and saved to {SKETCH_IMAGE_PATH}")
+
+            return final_sketch
+
+        except Exception as e:
+            print(f"Error generating sketch with OpenAI: {e}")
+            print("Falling back to local sketch generation...")
+            return self.create_sketch_local()
+
+    def create_sketch_local(self):
+        """Convert captured image to simple sketch with clean lines (local processing)."""
+        print("Converting image to sketch (local processing)...")
         img = cv2.imread(CAPTURED_IMAGE_PATH)
         if img is None:
             print("Error: Could not read captured image.")
             return None
 
-        # Original pencil sketch method
-        gray_image = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        inverted_image = 255 - gray_image
-        blurred_image = cv2.GaussianBlur(inverted_image, (21, 21), 0)
-        inverted_blurred_image = 255 - blurred_image
-        pencil_sketch = cv2.divide(gray_image, inverted_blurred_image, scale=256.0)
+        # Convert to grayscale
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-        # Adaptive threshold for clean contours
-        # Block size: smaller = more detail, larger = simpler
-        final_sketch = cv2.adaptiveThreshold(
-            pencil_sketch, 255,
-            cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-            cv2.THRESH_BINARY_INV,
-            15, 4  # Detail level: 11=detailed, 15=medium, 21=simple
-        )
+        # Apply strong bilateral filter to simplify image while keeping edges
+        # This reduces detail and creates smoother regions
+        simplified = cv2.bilateralFilter(gray, 15, 80, 80)
+
+        # Apply another pass for even more simplification
+        simplified = cv2.bilateralFilter(simplified, 15, 80, 80)
+
+        # Use Difference of Gaussians (DoG) for edge detection
+        # This creates cleaner, more artistic lines than Canny
+        blur1 = cv2.GaussianBlur(simplified, (3, 3), 1)
+        blur2 = cv2.GaussianBlur(simplified, (7, 7), 2)
+
+        # Subtract to get edges (correct order: sharper - blurrier)
+        dog = cv2.absdiff(blur1, blur2)
+
+        # Enhance contrast
+        dog = cv2.multiply(dog, 3.0)
+
+        # Threshold to get clean binary lines
+        # Lower threshold = more lines, higher = fewer lines
+        _, edges = cv2.threshold(dog, 30, 255, cv2.THRESH_BINARY)
+
+        # Invert so we have black lines on white background
+        final_sketch = 255 - edges
 
         cv2.imwrite(SKETCH_IMAGE_PATH, final_sketch)
         print(f"Sketch created and saved to {SKETCH_IMAGE_PATH}")
