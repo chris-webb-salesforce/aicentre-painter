@@ -126,14 +126,24 @@ class ImageProcessor:
                 result = client.images.edit(
                     model="gpt-image-1",
                     image=img_input,
-                    prompt="Transform this portrait into a minimalist single continuous line drawing. Use only simple, clean, flowing black lines on a pure white background. The sketch should be artistic, recognizable, and look like a hand-drawn portrait with minimal detail. No shading, no filling, just clean line work.",
-                    size="1024x1024",
-                    output_format="png"
+                    prompt="Transform this portrait into a minimalist single continuous line drawing. Use only simple, clean, flowing black lines on a pure white background. The sketch should be artistic, recognizable, and look like a hand-drawn portrait with minimal detail. No shading, no filling, just clean single line work.",
+                    size="1024x1024"
                 )
 
-            # Decode the base64 image
-            image_base64 = result.data[0].b64_json
-            image_bytes = base64.b64decode(image_base64)
+            # Get the image URL or base64 data
+            if hasattr(result.data[0], 'b64_json') and result.data[0].b64_json:
+                # Base64 format
+                image_base64 = result.data[0].b64_json
+                image_bytes = base64.b64decode(image_base64)
+            elif hasattr(result.data[0], 'url') and result.data[0].url:
+                # URL format - download the image
+                import urllib.request
+                print("Downloading image from OpenAI...")
+                image_url = result.data[0].url
+                with urllib.request.urlopen(image_url) as response:
+                    image_bytes = response.read()
+            else:
+                raise Exception("Unexpected response format from OpenAI")
 
             # Load and convert to the format we need
             from PIL import Image

@@ -4,6 +4,17 @@ SIMPLIFIED - Core settings only for reliable drawing.
 """
 
 import cv2
+import os
+from pathlib import Path
+
+# Load environment variables from .env file if it exists
+try:
+    from dotenv import load_dotenv
+    env_path = Path(__file__).parent / '.env'
+    load_dotenv(dotenv_path=env_path)
+except ImportError:
+    # python-dotenv not installed, will fall back to os.getenv()
+    pass
 
 # =============================================================================
 # ROBOT CONNECTION
@@ -123,6 +134,7 @@ DESIRED_J6_ANGLE = 0
 # =============================================================================
 # OPENAI API SETTINGS
 # =============================================================================
-# Set your OpenAI API key here or as an environment variable OPENAI_API_KEY
-OPENAI_API_KEY = None  # Set to your API key or use environment variable
-USE_OPENAI_SKETCH = True  # Set to True to use OpenAI for sketch generation
+# OpenAI API key - loads from .env file or environment variable
+# Priority: 1) .env file, 2) environment variable, 3) None
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', None)
+USE_OPENAI_SKETCH = os.getenv('USE_OPENAI_SKETCH', 'True').lower() in ('true', '1', 'yes')
