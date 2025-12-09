@@ -45,6 +45,21 @@ class ImageProcessingTester:
         print(f"   Size: {self.current_image.shape[1]}x{self.current_image.shape[0]}")
         return True
 
+    def load_sketch(self, sketch_path):
+        """Load a sketch directly (bypassing image-to-sketch conversion)."""
+        if not os.path.exists(sketch_path):
+            print(f"❌ Sketch not found: {sketch_path}")
+            return False
+
+        self.current_sketch = cv2.imread(sketch_path, cv2.IMREAD_GRAYSCALE)
+        if self.current_sketch is None:
+            print(f"❌ Failed to load sketch: {sketch_path}")
+            return False
+
+        print(f"✅ Loaded sketch: {sketch_path}")
+        print(f"   Size: {self.current_sketch.shape[1]}x{self.current_sketch.shape[0]}")
+        return True
+
     def capture_new_image(self):
         """Capture a new image from camera."""
         print("\nCapturing image from camera...")
@@ -232,19 +247,24 @@ class ImageProcessingTester:
         cv2.imwrite(filename, self.current_sketch)
         print(f"✅ Sketch saved as {filename}")
 
-    def full_pipeline(self, image_path):
-        """Run full processing pipeline on an image."""
+    def full_pipeline(self, image_path, is_sketch=False):
+        """Run full processing pipeline on an image or sketch."""
         print("\n" + "="*60)
         print("RUNNING FULL PROCESSING PIPELINE")
         print("="*60)
 
-        # Load image
-        if not self.load_image(image_path):
-            return False
+        if is_sketch:
+            # Load sketch directly
+            if not self.load_sketch(image_path):
+                return False
+        else:
+            # Load image and generate sketch
+            if not self.load_image(image_path):
+                return False
 
-        # Generate sketch
-        if not self.generate_sketch():
-            return False
+            # Generate sketch
+            if not self.generate_sketch():
+                return False
 
         # Process contours
         if not self.process_contours():
@@ -269,63 +289,84 @@ class ImageProcessingTester:
             print("IMAGE PROCESSING TEST MENU")
             print("="*60)
             print("1. Load image from file")
-            print("2. Capture image from camera")
-            print("3. Generate sketch from image")
-            print("4. Process contours")
-            print("5. Optimize drawing path")
-            print("6. Show source image")
-            print("7. Show sketch")
-            print("8. Show drawing preview")
-            print("9. Show statistics")
-            print("10. Save sketch")
-            print("11. Run full pipeline on image")
-            print("12. Exit")
+            print("2. Load sketch from file (skip conversion)")
+            print("3. Capture image from camera")
+            print("4. Generate sketch from image")
+            print("5. Process contours")
+            print("6. Optimize drawing path")
+            print("7. Show source image")
+            print("8. Show sketch")
+            print("9. Show drawing preview")
+            print("10. Show statistics")
+            print("11. Save sketch")
+            print("12. Run full pipeline on image")
+            print("13. Run full pipeline on sketch")
+            print("14. Exit")
             print("="*60)
 
-            choice = input("Select option (1-12): ").strip()
+            choice = input("Select option (1-14): ").strip()
 
             if choice == '1':
                 path = input("Enter image path: ").strip()
                 self.load_image(path)
             elif choice == '2':
-                self.capture_new_image()
+                path = input("Enter sketch path: ").strip()
+                self.load_sketch(path)
             elif choice == '3':
-                self.generate_sketch()
+                self.capture_new_image()
             elif choice == '4':
-                self.process_contours()
+                self.generate_sketch()
             elif choice == '5':
-                self.optimize_path()
+                self.process_contours()
             elif choice == '6':
-                self.show_image()
+                self.optimize_path()
             elif choice == '7':
-                self.show_sketch()
+                self.show_image()
             elif choice == '8':
-                self.show_preview()
+                self.show_sketch()
             elif choice == '9':
-                self.show_statistics()
+                self.show_preview()
             elif choice == '10':
+                self.show_statistics()
+            elif choice == '11':
                 filename = input("Enter filename (or press Enter for default): ").strip()
                 self.save_sketch(filename if filename else None)
-            elif choice == '11':
-                path = input("Enter image path: ").strip()
-                self.full_pipeline(path)
             elif choice == '12':
+                path = input("Enter image path: ").strip()
+                self.full_pipeline(path, is_sketch=False)
+            elif choice == '13':
+                path = input("Enter sketch path: ").strip()
+                self.full_pipeline(path, is_sketch=True)
+            elif choice == '14':
                 break
             else:
-                print("Invalid option. Please select 1-12.")
+                print("Invalid option. Please select 1-14.")
 
 
 def main():
     """Main entry point."""
     tester = ImageProcessingTester()
 
-    # Check if image path provided as argument
+    # Check if image/sketch path provided as argument
     if len(sys.argv) > 1:
-        image_path = sys.argv[1]
-        print(f"Processing image: {image_path}")
-        tester.full_pipeline(image_path)
+        file_path = sys.argv[1]
+
+        # Check if --sketch flag is provided
+        is_sketch = False
+        if len(sys.argv) > 2 and sys.argv[2] == '--sketch':
+            is_sketch = True
+            print(f"Processing sketch: {file_path}")
+        else:
+            print(f"Processing image: {file_path}")
+
+        tester.full_pipeline(file_path, is_sketch=is_sketch)
     else:
         # Run interactive menu
+        print("\nUsage:")
+        print(f"  {sys.argv[0]}                     - Interactive menu")
+        print(f"  {sys.argv[0]} <image.jpg>         - Process image")
+        print(f"  {sys.argv[0]} <sketch.jpg> --sketch - Process sketch directly")
+        print()
         tester.interactive_menu()
 
     print("\nExiting image processing tester...")

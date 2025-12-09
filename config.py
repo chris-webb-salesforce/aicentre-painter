@@ -1,6 +1,5 @@
 """
 Configuration settings for the AI Centre Painter robot system.
-SIMPLIFIED - Core settings only for reliable drawing.
 """
 
 import cv2
@@ -23,96 +22,74 @@ SERIAL_PORT = "/dev/ttyAMA0"
 BAUD_RATE = 115200
 
 # =============================================================================
+# CALIBRATION DATA
+# =============================================================================
+CALIBRATION_FILE = "surface_calibration.json"
+
+# =============================================================================
 # DRAWING WORKSPACE
 # =============================================================================
-# The (X, Y, Z) coordinate of the origin of your drawing area
-ORIGIN_X = 220.0  # Moved further from robot base for safer reach
+ORIGIN_X = 220.0
 ORIGIN_Y = 0.0
 ORIGIN_Z = 10.0
 
-# Drawing area dimensions (mm)
-# Reduced to ensure all contours fit within robot's safe workspace
-DRAWING_AREA_WIDTH_MM = 100  # Was 120 - reduced to prevent overhang
-DRAWING_AREA_HEIGHT_MM = 100  # Was 120 - keeping square aspect ratio
+DRAWING_AREA_WIDTH_MM = 100
+DRAWING_AREA_HEIGHT_MM = 100
 
 # =============================================================================
-# PEN HEIGHTS - FIXED (No compensation)
+# PEN HEIGHT OFFSETS (relative to calibrated surface)
 # =============================================================================
-SAFE_TRAVEL_HEIGHT = ORIGIN_Z + 50      # Pen fully up for travel
-PEN_RETRACT_Z = ORIGIN_Z + 25           # Pen up between contours
-PEN_DRAWING_Z = ORIGIN_Z - 2.5          # Pen touching paper (drawing)
+LIFT_HEIGHT_OFFSET = 25.0
+DRAWING_HEIGHT_OFFSET = -2.0
+
+# =============================================================================
+# SAFE TRAVEL HEIGHT
+# =============================================================================
+SAFE_TRAVEL_HEIGHT = ORIGIN_Z + 50
 
 # =============================================================================
 # SAFETY LIMITS
 # =============================================================================
-MIN_SAFE_Z = ORIGIN_Z - 10              # Absolute minimum Z
-MAX_SAFE_Z = ORIGIN_Z + 200             # Maximum safe Z height
-SAFETY_MARGIN = 5                       # Additional safety margin (mm)
+MIN_SAFE_Z = ORIGIN_Z - 10
+MAX_SAFE_Z = ORIGIN_Z + 200
+SAFETY_MARGIN = 5
 
 # =============================================================================
 # MOVEMENT SPEEDS
 # =============================================================================
-# Increase speeds gradually to find your robot's sweet spot
-# Start conservative, then increase by 5 if drawings are reliable
-
-TRAVEL_SPEED = 30       # Moving with pen up (was 20)
-DRAWING_SPEED = 15      # Drawing lines (was 10 - increased for smoother movement)
-APPROACH_SPEED = 20     # Lowering pen (was 15)
-LIFT_SPEED = 25         # Raising pen (was 20)
+TRAVEL_SPEED = 30
+DRAWING_SPEED = 15
+APPROACH_SPEED = 20
+LIFT_SPEED = 25
 
 # =============================================================================
-# TIMING - CRITICAL FOR RELIABILITY
+# TIMING
 # =============================================================================
-# Choose a preset by uncommenting one section:
-
-# --- PRESET 1: RELIABLE (Original - slow but guaranteed) ---
-# MIN_COMMAND_INTERVAL = 0.5
-# MOVEMENT_TIMEOUT = 5.0
-# POSITION_TOLERANCE = 3.0
-# MOVEMENT_SETTLING_TIME = 0.1
-
-# --- PRESET 2: BALANCED (Recommended - smooth and reliable) ---
-MIN_COMMAND_INTERVAL = 0.2          # Faster than reliable, still safe
-MOVEMENT_TIMEOUT = 3.0              # Shorter timeout
-POSITION_TOLERANCE = 5.0            # Slightly looser tolerance
-MOVEMENT_SETTLING_TIME = 0.05       # Quick settle
-
-# --- PRESET 3: SMOOTH (Fast and fluid - may skip on complex drawings) ---
-# MIN_COMMAND_INTERVAL = 0.1
-# MOVEMENT_TIMEOUT = 2.0
-# POSITION_TOLERANCE = 8.0
-# MOVEMENT_SETTLING_TIME = 0.02
-
-# --- PRESET 4: MAXIMUM SPEED (Experimental - use with caution) ---
-# MIN_COMMAND_INTERVAL = 0.05
-# MOVEMENT_TIMEOUT = 1.0
-# POSITION_TOLERANCE = 10.0
-# MOVEMENT_SETTLING_TIME = 0.01
-
-POSITION_CHECK_INTERVAL = 0.05      # How often to check position (seconds)
+MIN_COMMAND_INTERVAL = 0.2
+MOVEMENT_TIMEOUT = 3.0
+POSITION_TOLERANCE = 5.0
+MOVEMENT_SETTLING_TIME = 0.05
+POSITION_CHECK_INTERVAL = 0.05
 
 # =============================================================================
-# MOVEMENT SYNCHRONIZATION - MUST BE TRUE
+# MOVEMENT SYNCHRONIZATION
 # =============================================================================
-USE_MOVEMENT_SYNC = True            # Wait for each movement to complete
-MAX_WAIT_TIME = 3.0                 # Maximum wait time per move
+USE_MOVEMENT_SYNC = True
+MAX_WAIT_TIME = 3.0
 
 # =============================================================================
 # IMAGE PROCESSING
 # =============================================================================
 IMAGE_WIDTH_PX = 480
-IMAGE_HEIGHT_PX = 480  # Match your source image dimensions
+IMAGE_HEIGHT_PX = 480
 
-# Contour filtering
-MIN_CONTOUR_AREA = 20                       # Reduced to keep more detail (was 50)
-CONTOUR_SIMPLIFICATION_FACTOR = 0.003       # Less simplification for smoother lines (was 0.01)
-CONTOUR_SMOOTHING = 5                       # Smoothing strength: 2=light, 3=medium, 5=heavy, 0=off
-DUPLICATE_CONTOUR_THRESHOLD = 5.0           # Distance (mm) to detect duplicates: 3=strict, 5=loose, 0=off
-BREAK_CLOSED_CONTOURS = True                # Break blob outlines (prevents drawing around filled areas)
-CLOSED_CONTOUR_THRESHOLD = 15.0             # Distance (mm) to consider contour closed: 10=loose, 5=medium, 2=strict
-
-# Path optimization
-OPTIMIZE_DRAWING_PATH = True                # Use nearest-neighbor ordering
+MIN_CONTOUR_AREA = 30
+CONTOUR_SIMPLIFICATION_FACTOR = 0.002
+CONTOUR_SMOOTHING = 3
+DUPLICATE_CONTOUR_THRESHOLD = 5.0
+BREAK_CLOSED_CONTOURS = True
+CLOSED_CONTOUR_THRESHOLD = 10.0
+OPTIMIZE_DRAWING_PATH = True
 
 # =============================================================================
 # CAMERA AND FILE PATHS
@@ -125,16 +102,11 @@ CAMERA_INDEX = 0
 # =============================================================================
 # ROBOT ORIENTATION
 # =============================================================================
-# [RX, RY, RZ] - Pen pointing straight down for flat table drawing
 DRAWING_ORIENTATION = [180, 0, 45]
-
-# Desired J6 angle for pen holder
 DESIRED_J6_ANGLE = 0
 
 # =============================================================================
 # OPENAI API SETTINGS
 # =============================================================================
-# OpenAI API key - loads from .env file or environment variable
-# Priority: 1) .env file, 2) environment variable, 3) None
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', None)
-USE_OPENAI_SKETCH = os.getenv('USE_OPENAI_SKETCH', 'True').lower() in ('true', '1', 'yes')
+USE_OPENAI_SKETCH = os.getenv('USE_OPENAI_SKETCH', 'False').lower() in ('true', '1', 'yes')

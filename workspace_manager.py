@@ -1,13 +1,10 @@
 """
 Workspace and coordinate system management.
-Handles home position recording, coordinate validation, and workspace calibration.
 """
 
 import os
 import json
-import time
 import numpy as np
-from datetime import datetime
 from config import *
 
 
@@ -35,7 +32,7 @@ class WorkspaceManager:
         
         for i, contour_points in enumerate(contours):
             for j, point in enumerate(contour_points):
-                x, y = point[0], point[1]  # Extract X,Y from 3D coordinates
+                x, y = point[0], point[1]
                 total_points += 1
                 
                 # Track actual bounds
@@ -115,8 +112,8 @@ class WorkspaceManager:
             contour_distance = 0
             if len(contour_points) > 1:
                 for j in range(1, len(contour_points)):
-                    x1, y1 = contour_points[j-1][0], contour_points[j-1][1]  # Extract X,Y from 3D
-                    x2, y2 = contour_points[j][0], contour_points[j][1]      # Extract X,Y from 3D
+                    x1, y1 = contour_points[j-1][0], contour_points[j-1][1]
+                    x2, y2 = contour_points[j][0], contour_points[j][1]
                     seg_dist = np.sqrt((x2 - x1)**2 + (y2 - y1)**2)
                     contour_distance += seg_dist
                 
@@ -143,199 +140,71 @@ class WorkspaceManager:
         print(f"Estimated time:     {(total_segments * 0.1 + len(contours) * 0.5):.1f}s")
         print("="*50)
 
-    def test_coordinate_system(self):
-        """Test coordinate system and transformations."""
-        print("\n--- COORDINATE SYSTEM TEST ---")
+
+class SurfaceCalibrator:
+    def __init__(self):
+        self.plane_coeffs = None
+        self.calibration_data = {}
+        self.load_calibration()
+
+    def calculate_plane(self, p1, p2, p3):
+        """Calculate plane equation Ax + By + Cz + D = 0 from 3 points."""
+        p1 = np.array(p1[:3])
+        p2 = np.array(p2[:3])
+        p3 = np.array(p3[:3])
+
+        v1 = p2 - p1
+        v2 = p3 - p1
+
+        normal = np.cross(v1, v2)
+        a, b, c = normal
+        d = -np.dot(normal, p1)
+
+        self.plane_coeffs = (a, b, c, d)
+        return (a, b, c, d)
+
+    def get_z_at(self, x, y):
+        """Returns the Z coordinate of the surface at X, Y."""
+        if not self.plane_coeffs:
+            print("CRITICAL: No calibration loaded. Returning safe default.")
+            return SAFE_TRAVEL_HEIGHT
+
+        a, b, c, d = self.plane_coeffs
+
+        if abs(c) < 0.001:
+            return SAFE_TRAVEL_HEIGHT
+
+        z = -(a * x + b * y + d) / c
+        return z
+
+    def save_calibration(self, p1, p2, p3, orientation):
+        """Save the 3 calibration points and tool orientation."""
+        data = {
+            "p1": p1,
+            "p2": p2,
+            "p3": p3,
+            "orientation": orientation
+        }
+
+        self.calculate_plane(p1, p2, p3)
         
-        # Run coordinate transformation test
-        self.verify_coordinate_transformation()
-        
-        # Test a few sample points
-        print("\nTesting sample trajectory points:")
-        test_contours = [
-            [(ORIGIN_X + 10, ORIGIN_Y + 10, PEN_DRAWING_Z), (ORIGIN_X + 30, ORIGIN_Y + 20, PEN_DRAWING_Z)],  # Small line
-            [(ORIGIN_X + 50, ORIGIN_Y + 50, PEN_DRAWING_Z), (ORIGIN_X + 70, ORIGIN_Y + 70, PEN_DRAWING_Z)],  # Diagonal line
-        ]
-        
-        if self.validate_trajectory_points(test_contours):
-            print("✅ Coordinate system test passed")
-        else:
-            print("❌ Coordinate system test failed")
-        
-        # Show trajectory summary for test points
-        self.create_trajectory_summary(test_contours)
+        with open(CALIBRATION_FILE, 'w') as f:
+            json.dump(data, f, indent=4)
+        print(f"Calibration saved to {CALIBRATION_FILE}")
 
-    def test_drawing_area(self):
-        """Test the drawing area with gentle movements."""
-        print("\n--- TESTING DRAWING AREA ---")
-        print("This will draw a test rectangle to verify settings.")
-
-        self.robot.go_to_home_position()
-
-        # Define test rectangle (smaller than full area)
-        margin = 20
-        test_corners = [
-            (ORIGIN_X + margin, ORIGIN_Y + margin),
-            (ORIGIN_X + DRAWING_AREA_WIDTH_MM - margin, ORIGIN_Y + margin),
-            (ORIGIN_X + DRAWING_AREA_WIDTH_MM - margin, ORIGIN_Y + DRAWING_AREA_HEIGHT_MM - margin),
-            (ORIGIN_X + margin, ORIGIN_Y + DRAWING_AREA_HEIGHT_MM - margin),
-            (ORIGIN_X + margin, ORIGIN_Y + margin),  # Close the rectangle
-        ]
-
-        # Move to start position
-        print("Moving to start position...")
-        start_x, start_y = test_corners[0]
-        self.robot.move_to(start_x, start_y, PEN_RETRACT_Z, TRAVEL_SPEED)
-
-        # Draw test rectangle
-        print("Drawing test rectangle...")
-        self.robot.pen_down()
-
-        for i in range(1, len(test_corners)):
-            print(f"Drawing edge {i}/{len(test_corners)-1}...")
-            corner_x, corner_y = test_corners[i]
-            self.robot.draw_to(corner_x, corner_y)
-            time.sleep(0.2)
-
-        self.robot.pen_up()
-        print("Test complete!")
-        self.robot.go_to_home_position()
-
-
-class HomePositionManager:
-    """Manage home position recording and loading for ElephantRobotics workflow."""
-    
-    def __init__(self, robot_controller):
-        """Initialize with robot controller."""
-        self.robot = robot_controller
-
-    def record_home_position(self):
-        """
-        Record current robot position as home position (as described in their workflow).
-        This should be done after manually positioning the pen tip on the drawing board.
-        """
-        print("\n--- RECORDING HOME POSITION ---")
-        print("Position the robot arm so the pen tip lightly touches the drawing board,")
-        print("then press Enter to record this as the home position.")
-        input("Press Enter when ready...")
-        
+    def load_calibration(self):
+        if not os.path.exists(CALIBRATION_FILE):
+            print("No surface calibration file found.")
+            return False
+            
         try:
-            # Get current joint angles and coordinates
-            current_angles = self.robot.mc.get_angles()
-            current_coords = self.robot.mc.get_coords()
-            
-            if not current_angles or not current_coords:
-                print("❌ Failed to get current robot position")
-                return False
-            
-            home_position = {
-                "joint_angles": current_angles,
-                "cartesian_coords": current_coords,
-                "timestamp": datetime.now().isoformat(),
-                "description": "Home position for drawing board contact"
-            }
-            
-            # Save to file
-            with open(HOME_POSITION_FILE, 'w') as f:
-                json.dump(home_position, f, indent=2)
-            
-            print("✅ Home position recorded successfully!")
-            print(f"Joint angles: {current_angles}")
-            print(f"Cartesian coordinates: {current_coords}")
-            print(f"Saved to: {HOME_POSITION_FILE}")
-            
+            with open(CALIBRATION_FILE, 'r') as f:
+                data = json.load(f)
+                
+            self.calibration_data = data
+            self.calculate_plane(data['p1'], data['p2'], data['p3'])
+            print(f"Surface calibration loaded. Orientation: {data['orientation']}")
             return True
-            
         except Exception as e:
-            print(f"❌ Failed to record home position: {e}")
+            print(f"Failed to load calibration: {e}")
             return False
-
-    def load_home_position(self):
-        """Load previously recorded home position."""
-        try:
-            if not os.path.exists(HOME_POSITION_FILE):
-                print(f"❌ Home position file not found: {HOME_POSITION_FILE}")
-                return None
-            
-            with open(HOME_POSITION_FILE, 'r') as f:
-                home_position = json.load(f)
-            
-            print(f"✅ Home position loaded from {HOME_POSITION_FILE}")
-            print(f"Recorded: {home_position.get('timestamp', 'Unknown')}")
-            
-            return home_position
-            
-        except Exception as e:
-            print(f"❌ Failed to load home position: {e}")
-            return None
-
-    def go_to_recorded_home(self):
-        """Move to the recorded home position."""
-        home_pos = self.load_home_position()
-        if not home_pos:
-            print("Using default home position instead...")
-            self.robot.go_to_home_position()
-            return False
-
-        try:
-            print("Moving to recorded home position...")
-
-            # Move to recorded joint angles
-            joint_angles = home_pos["joint_angles"]
-            self.robot.mc.send_angles(joint_angles, 30)
-            time.sleep(3)  # Wait for movement to complete
-
-            print("✅ Moved to recorded home position")
-            return True
-
-        except Exception as e:
-            print(f"❌ Failed to move to recorded home position: {e}")
-            print("Using default home position instead...")
-            self.robot.go_to_home_position()
-            return False
-
-    def calibrate_pen_pressure(self):
-        """Interactive calibration to find optimal pen pressure."""
-        print("\n--- PEN PRESSURE CALIBRATION ---")
-        print("This will help find the optimal pen pressure for your setup.")
-        print("Place a test paper on the drawing surface.")
-
-        self.robot.go_to_home_position()
-
-        # Move to center of drawing area
-        test_x = ORIGIN_X + DRAWING_AREA_WIDTH_MM / 2
-        test_y = ORIGIN_Y + DRAWING_AREA_HEIGHT_MM / 2
-        test_z = ORIGIN_Z
-        step_size = 0.5
-
-        print("Moving to test position...")
-        self.robot.move_to(test_x, test_y, PEN_RETRACT_Z, 30)
-        time.sleep(1)
-
-        print("\nUse keyboard to adjust pen height (Z):")
-        print("  'd' = Move pen down (more pressure)")
-        print("  'u' = Move pen up (less pressure)")
-        print("  's' = Save this height")
-        print("  'q' = Cancel calibration")
-
-        while True:
-            print(f"Current Z position: {test_z:.1f}mm")
-            self.robot.move_to(test_x, test_y, test_z, 15)
-
-            key = input("Command: ").lower().strip()
-
-            if key == 'd':
-                test_z -= step_size
-                print("Moving down...")
-            elif key == 'u':
-                test_z += step_size
-                print("Moving up...")
-            elif key == 's':
-                print(f"\nOptimal drawing Z position: {test_z:.1f}mm")
-                print(f"Update PEN_DRAWING_Z in config.py to: {test_z:.1f}")
-                self.robot.move_to(test_x, test_y, PEN_RETRACT_Z, 30)
-                return test_z
-            elif key == 'q':
-                print("Calibration cancelled.")
-                self.robot.move_to(test_x, test_y, PEN_RETRACT_Z, 30)
-                return None
